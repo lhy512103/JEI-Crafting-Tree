@@ -1,0 +1,44 @@
+package com.lhy.jeict.client;
+
+import net.neoforged.neoforge.client.event.InputEvent;
+import net.neoforged.neoforge.client.event.RenderGuiEvent;
+import net.neoforged.neoforge.client.event.ScreenEvent;
+
+public final class ClientEvents {
+    private ClientEvents() {
+    }
+
+    public static void onRenderGuiPost(RenderGuiEvent.Post event) {
+        FloatingMaterialOverlayState.updateDrag();
+        FloatingMaterialOverlayState.render(event.getGuiGraphics());
+    }
+
+    public static void onScreenRenderPost(ScreenEvent.Render.Post event) {
+        FloatingMaterialOverlayState.updateDrag();
+        FloatingMaterialOverlayState.render(event.getGuiGraphics());
+    }
+
+    public static void onScreenMousePressed(ScreenEvent.MouseButtonPressed.Pre event) {
+        FloatingMaterialOverlayState.handleScreenMouseClicked(event);
+    }
+
+    public static void onScreenMouseReleased(ScreenEvent.MouseButtonReleased.Pre event) {
+        FloatingMaterialOverlayState.handleScreenMouseReleased(event);
+    }
+
+    public static void onScreenMouseDragged(ScreenEvent.MouseDragged.Pre event) {
+        FloatingMaterialOverlayState.handleScreenMouseDragged(event);
+    }
+
+    public static void onScreenMouseScrolled(ScreenEvent.MouseScrolled.Pre event) {
+        FloatingMaterialOverlayState.handleScreenMouseScrolled(event);
+    }
+
+    public static void onMouseButton(InputEvent.MouseButton.Pre event) {
+        FloatingMaterialOverlayState.handleMouseButton(event);
+    }
+
+    public static void onMouseScrolled(InputEvent.MouseScrollingEvent event) {
+        FloatingMaterialOverlayState.handleMouseScrolled(event);
+    }
+}

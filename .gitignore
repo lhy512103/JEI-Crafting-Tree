@@ -1,0 +1,42 @@
+# Gradle
+.gradle/
+build/
+out/
+
+# Minecraft / NeoForge run directories
+run/
+runs/
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.classpath
+.project
+.settings/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and crash reports
+*.log
+*.log.gz
+crash-*.txt
+hs_err_pid*.log
+replay_pid*.log
+
+# Archives and release artifacts
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+*.zip
+*.tar
+*.tar.gz
+
+# Local secrets / environment
+.env
+.env.*
+local.properties
