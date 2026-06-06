@@ -1,10 +1,10 @@
 # Changelog
 
+## English
+
 All notable changes to JEI Crafting Tree will be documented in this file.
 
-JEI Crafting Tree 的所有重要变更都会记录在此文件中。
-
-## [1.0.0] - 2026-06-06
+### [1.0.0] - 2026-06-06
 
 - Initial GitHub release.
 - Added JEI recipe tree overview and recursive recipe expansion.
@@ -12,7 +12,11 @@ JEI Crafting Tree 的所有重要变更都会记录在此文件中。
 - Added floating total-material panel with JEI recipe and usage shortcuts.
 - Added optional backend API for AE2-related pattern hints, encoding, and upload workflows.
 
-## [1.0.0] - 2026-06-06
+## 中文
+
+JEI Crafting Tree 的所有重要变更都会记录在此文件中。
+
+### [1.0.0] - 2026-06-06
 
 - 初始 GitHub 发布版本。
 - 添加 JEI 配方树总览和递归配方展开。
