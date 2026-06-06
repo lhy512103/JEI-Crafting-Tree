@@ -32,9 +32,6 @@ import net.neoforged.neoforge.client.event.InputEvent;
 import net.neoforged.neoforge.client.event.ScreenEvent;
 
 public final class FloatingMaterialOverlayState {
-    private static final int[] GROUP_COLORS = {
-            0xFF7CC7FF, 0xFFFFC857, 0xFF7CFF9B, 0xFFFF7CA8, 0xFFB47CFF, 0xFFFF9B5F
-    };
     private static final int BASE_WIDTH = 168;
     private static final int HEADER_HEIGHT = 20;
     private static final int CONTROL_SIZE = 12;
@@ -47,9 +44,6 @@ public final class FloatingMaterialOverlayState {
     private static final int GROUP_HEADER_HEIGHT = 14;
     private static final int GROUP_PADDING = 4;
     private static final int SCROLL_STEP = 14;
-    private static final int COLOR_ENOUGH = 0xFF00FF00;
-    private static final int COLOR_PARTIAL = 0xFFFFFF00;
-    private static final int COLOR_MISSING = 0xFFFF0000;
     private static final float JEI_BOOKMARK_Z = 200.0F;
     private static final float OVERLAY_Z = JEI_BOOKMARK_Z + 1.0F;
     private static final float TOOLTIP_Z = OVERLAY_Z + 400.0F;
@@ -142,17 +136,18 @@ public final class FloatingMaterialOverlayState {
         graphics.pose().translate(x, y, OVERLAY_Z);
         graphics.pose().scale(scale, scale, 1.0F);
 
-        graphics.fill(0, 0, BASE_WIDTH, height, 0x3310161C);
-        drawBorder(graphics, 0, 0, BASE_WIDTH, height, pinned ? 0xFFFFE082 : 0xFFFFFFFF);
+        RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
+        graphics.fill(0, 0, BASE_WIDTH, height, theme.overlayFill());
+        drawBorder(graphics, 0, 0, BASE_WIDTH, height, pinned ? theme.pinned() : theme.panelBorder());
 
         graphics.drawString(font, Component.translatable("gui.jeict.recipe_tree.floating_materials_title"), 22, 6,
-                0xFFEAF4FF, false);
-        drawControl(graphics, 6, 5, pinned ? "P" : "p", pinned ? 0xFFFFE082 : 0xFFFFFFFF);
-        drawControl(graphics, BASE_WIDTH - 44, 5, showAll ? "A" : "a", showAll ? 0xFF7CFF9B : 0xFFFFFFFF);
+                theme.metricText(), false);
+        drawControl(graphics, 6, 5, pinned ? "P" : "p", pinned ? theme.pinned() : theme.controlText());
+        drawControl(graphics, BASE_WIDTH - 44, 5, showAll ? "A" : "a", showAll ? theme.success() : theme.controlText());
         if (snapshot.context() != null) {
-            drawControl(graphics, BASE_WIDTH - 31, 5, "\u2190", 0xFF7CC7FF);
+            drawControl(graphics, BASE_WIDTH - 31, 5, "\u2190", theme.accent());
         }
-        drawControl(graphics, BASE_WIDTH - 18, 5, "x", 0xFFFF8A80);
+        drawControl(graphics, BASE_WIDTH - 18, 5, "x", theme.danger());
 
         hoveredGroupIndex = -1;
         hoveredEntryIndex = -1;
@@ -172,15 +167,15 @@ public final class FloatingMaterialOverlayState {
                 continue;
             }
             if (currentY > height - 4) {
-                graphics.drawString(font, "...", 8, height - 16, 0xFFD4DEE7, false);
+                graphics.drawString(font, "...", 8, height - 16, theme.mutedText(), false);
                 break;
             }
 
-            int color = GROUP_COLORS[groupIndex % GROUP_COLORS.length];
+            int color = theme.groupColor(groupIndex);
             int clippedTop = Math.max(currentY, contentTop);
             int clippedBottom = Math.min(groupBottom, height - 4);
             if (clippedTop < clippedBottom) {
-                graphics.fill(4, clippedTop, BASE_WIDTH - 4, clippedBottom, 0x33273038);
+                graphics.fill(4, clippedTop, BASE_WIDTH - 4, clippedBottom, theme.overlayGroupFill());
                 drawBorder(graphics, 4, clippedTop, BASE_WIDTH - 4, clippedBottom, color);
             }
 
@@ -188,7 +183,7 @@ public final class FloatingMaterialOverlayState {
                 String collapseIcon = collapsed ? "\u25B6" : "\u25BC";
                 graphics.drawString(font, collapseIcon, 6, currentY + 3, color, false);
                 String titleText = font.substrByWidth(group.title(), BASE_WIDTH - 24).getString();
-                graphics.drawString(font, titleText, 16, currentY + 3, 0xFFEAF4FF, false);
+                graphics.drawString(font, titleText, 16, currentY + 3, theme.metricText(), false);
             }
 
             if (!collapsed) {
@@ -217,7 +212,7 @@ public final class FloatingMaterialOverlayState {
                     if (isHovered) {
                         hoveredGroupIndex = groupIndex;
                         hoveredEntryIndex = entryIndex;
-                        graphics.fill(itemX - 1, itemY - 1, itemX + ITEM_SIZE + 1, itemY + ITEM_SIZE + 1, 0x40FFFFFF);
+                        graphics.fill(itemX - 1, itemY - 1, itemX + ITEM_SIZE + 1, itemY + ITEM_SIZE + 1, theme.hoverFill());
                         hoveredStack = entry.stack().copy();
                     }
 
@@ -225,7 +220,7 @@ public final class FloatingMaterialOverlayState {
                     graphics.renderItem(displayStack, itemX, itemY);
 
                     if (showAll && entry.remaining() <= 0) {
-                        graphics.drawString(font, "\u2713", itemX + 10, itemY + 10, COLOR_ENOUGH, true);
+                        graphics.drawString(font, "\u2713", itemX + 10, itemY + 10, theme.enough(), true);
                     } else {
                         String label = entry.remaining() > 1 ? formatCompactCount(entry.remaining()) : "1";
                         graphics.drawString(font, label, itemX + 17, itemY + 10, entry.color(), true);
@@ -249,12 +244,12 @@ public final class FloatingMaterialOverlayState {
             int trackBottom = height - 4;
             int trackHeight = trackBottom - trackTop;
             if (trackHeight > 0) {
-                graphics.fill(trackX, trackTop, trackX + 2, trackBottom, 0x40FFFFFF);
+                graphics.fill(trackX, trackTop, trackX + 2, trackBottom, theme.scrollbarTrack());
                 int thumbHeight = Math.max(12, trackHeight * trackHeight / (trackHeight + maxScrollOffset));
                 int thumbY = trackTop + (maxScrollOffset > 0
                         ? (int) ((long) scrollOffset * (trackHeight - thumbHeight) / maxScrollOffset)
                         : 0);
-                graphics.fill(trackX - 1, thumbY, trackX + SCROLLBAR_WIDTH, thumbY + thumbHeight, 0x80FFFFFF);
+                graphics.fill(trackX - 1, thumbY, trackX + SCROLLBAR_WIDTH, thumbY + thumbHeight, theme.scrollbarThumb());
             }
         }
 
@@ -618,11 +613,11 @@ public final class FloatingMaterialOverlayState {
                 }
                 int color;
                 if (remaining <= 0) {
-                    color = COLOR_ENOUGH;
+                    color = RecipeTreeTheme.current().enough();
                 } else if (available <= 0) {
-                    color = COLOR_MISSING;
+                    color = RecipeTreeTheme.current().missing();
                 } else {
-                    color = COLOR_PARTIAL;
+                    color = RecipeTreeTheme.current().partial();
                 }
                 ItemStack displayStack = accumulator.stack.copyWithCount(1);
                 entries.add(new DisplayEntry(displayStack, remaining, accumulator.count, color));
@@ -636,8 +631,9 @@ public final class FloatingMaterialOverlayState {
     }
 
     private static void drawControl(GuiGraphics graphics, int x, int y, String text, int color) {
-        graphics.fill(x, y, x + CONTROL_SIZE, y + CONTROL_SIZE, 0xFF4D5962);
-        graphics.fill(x + 1, y + 1, x + CONTROL_SIZE - 1, y + CONTROL_SIZE - 1, 0xFF30373D);
+        RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
+        graphics.fill(x, y, x + CONTROL_SIZE, y + CONTROL_SIZE, theme.controlBorder());
+        graphics.fill(x + 1, y + 1, x + CONTROL_SIZE - 1, y + CONTROL_SIZE - 1, theme.controlFill());
         graphics.drawString(Minecraft.getInstance().font, text, x + 3, y + 2, color, false);
     }
 
