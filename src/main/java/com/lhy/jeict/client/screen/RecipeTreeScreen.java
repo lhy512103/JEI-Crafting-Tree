@@ -491,18 +491,17 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
     }
 
     private void collectCosts(TreeNode node, Map<IngredientKey, CostEntry> costs, Map<IngredientKey, CostEntry> leftovers, double multiplier) {
-        double adjustedMultiplier = multiplier;
-        if (node.recipe() != null) {
-            adjustedMultiplier *= (double) node.batches() / node.baseBatches();
-        }
         if (!node.expanded() || node.cycle() || node.limited() || node.recipe() == null || node.children().isEmpty()) {
             costs.compute(node.key(), (key, entry) -> CostEntry.merge(entry, node.singleStack(), effectiveAmount(node, multiplier)));
             return;
         }
-        int leftoverAmount = effectiveLeftoverAmount(node, multiplier);
-        if (leftoverAmount > 0) {
+
+        int actualBatches = effectiveBatches(node, multiplier);
+        int leftoverAmount = effectiveLeftoverAmount(node, multiplier, actualBatches);
+        if (node != tree.root() && leftoverAmount > 0) {
             leftovers.compute(node.key(), (key, entry) -> CostEntry.merge(entry, node.singleStack(), leftoverAmount));
         }
+        double adjustedMultiplier = (double) actualBatches / Math.max(1, node.baseBatches());
         for (TreeNode child : node.children()) {
             collectCosts(child, costs, leftovers, adjustedMultiplier);
         }
@@ -522,11 +521,19 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         return Math.max(1, (int) Math.ceil(node.amount() * multiplier));
     }
 
-    private int effectiveLeftoverAmount(TreeNode node, double multiplier) {
+    private int effectiveBatches(TreeNode node, double multiplier) {
+        if (node == tree.root()) {
+            return node.batches();
+        }
+        int required = effectiveAmount(node, multiplier);
+        return Math.max(1, (required + node.outputPerBatch() - 1) / node.outputPerBatch());
+    }
+
+    private int effectiveLeftoverAmount(TreeNode node, double multiplier, int actualBatches) {
         if (node.recipe() == null) {
             return 0;
         }
-        int produced = (int) Math.ceil(node.batches() * node.outputPerBatch() * multiplier);
+        int produced = actualBatches * node.outputPerBatch();
         return Math.max(0, produced - effectiveAmount(node, multiplier));
     }
 
@@ -540,7 +547,7 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         }
         double childMultiplier = multiplier;
         if (current.recipe() != null) {
-            childMultiplier *= (double) current.batches() / current.baseBatches();
+            childMultiplier = (double) effectiveBatches(current, multiplier) / Math.max(1, current.baseBatches());
         }
         for (TreeNode child : current.children()) {
             Optional<Double> found = multiplierFor(child, target, childMultiplier);
@@ -571,9 +578,8 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
             }
             TreeNode node = layout.node();
             if (node.recipe() != null && !node.children().isEmpty() && layout.itemContains(mouseX, mouseY)) {
-                if (!renderJeiRecipePreview(graphics, node, mouseX, mouseY)) {
-                    renderRecipePreview(graphics, node, mouseX, mouseY);
-                }
+                List<Component> lines = node.displayStack().getTooltipLines(minecraft.player, TooltipFlag.Default.NORMAL);
+                renderCombinedRecipeTooltip(graphics, node, lines, mouseX, mouseY);
                 return;
             }
             List<Component> lines = node.displayStack().getTooltipLines(minecraft.player, TooltipFlag.Default.NORMAL);
@@ -582,7 +588,73 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         }
     }
 
-    private void renderRecipePreview(GuiGraphics graphics, TreeNode node, int mouseX, int mouseY) {
+    private void renderCombinedRecipeTooltip(GuiGraphics graphics, TreeNode node, List<Component> lines, int mouseX, int mouseY) {
+        Optional<IRecipeLayoutDrawable<?>> drawableOptional = recipePreviewCache.computeIfAbsent(node.recipe().id(), id -> createRecipePreview(node));
+        if (drawableOptional.isEmpty()) {
+            graphics.renderComponentTooltip(font, lines, mouseX, mouseY);
+            int previewAnchorY = mouseY + tooltipHeight(lines) + scale(12);
+            renderRecipePreview(graphics, node, mouseX, previewAnchorY);
+            return;
+        }
+
+        IRecipeLayoutDrawable<?> drawable = drawableOptional.get();
+        Rect2i rect = drawable.getRectWithBorder();
+        int textWidth = tooltipTextWidth(lines);
+        int textHeight = tooltipHeight(lines);
+        int padding = scale(5);
+        int gap = scale(5);
+        int contentWidth = Math.max(textWidth, rect.getWidth());
+        int contentHeight = textHeight + gap + rect.getHeight();
+        int panelWidth = contentWidth + padding * 2;
+        int panelHeight = contentHeight + padding * 2;
+        int x = Math.min(mouseX + scale(12), width - panelWidth - scale(4));
+        int y = Math.min(mouseY - scale(12), height - panelHeight - scale(4));
+        x = Math.max(scale(4), x);
+        y = Math.max(scale(4), y);
+
+        graphics.pose().pushPose();
+        graphics.pose().translate(0, 0, 400);
+        drawTooltipBox(graphics, x, y, panelWidth, panelHeight);
+        int textX = x + padding;
+        int textY = y + padding;
+        for (int i = 0; i < lines.size(); i++) {
+            graphics.drawString(font, lines.get(i), textX, textY + i * scale(10), 0xFFFFFFFF, false);
+        }
+        int recipeX = x + padding;
+        int recipeY = textY + textHeight + gap;
+        drawable.setPosition(recipeX, recipeY);
+        drawable.drawRecipe(graphics, mouseX, mouseY);
+        drawable.drawOverlays(graphics, mouseX, mouseY);
+        graphics.pose().popPose();
+    }
+
+    private int tooltipTextWidth(List<Component> lines) {
+        int width = 0;
+        for (Component line : lines) {
+            width = Math.max(width, scale(font.width(line)));
+        }
+        return width;
+    }
+
+    private int tooltipHeight(List<Component> lines) {
+        if (lines.isEmpty()) {
+            return 0;
+        }
+        return scale(8 + (lines.size() - 1) * 10);
+    }
+
+    private void drawTooltipBox(GuiGraphics graphics, int x, int y, int width, int height) {
+        int background = 0xF0100010;
+        int borderTop = 0xFF500080;
+        int borderBottom = 0xFF280040;
+        graphics.fill(x, y, x + width, y + height, background);
+        graphics.fill(x + 1, y, x + width - 1, y + 1, borderTop);
+        graphics.fill(x + 1, y + height - 1, x + width - 1, y + height, borderBottom);
+        graphics.fill(x, y + 1, x + 1, y + height - 1, borderTop);
+        graphics.fill(x + width - 1, y + 1, x + width, y + height - 1, borderBottom);
+    }
+
+    private void renderRecipePreview(GuiGraphics graphics, TreeNode node, int mouseX, int anchorY) {
         int cell = scale(24);
         int gap = scale(6);
         int padding = scale(8);
@@ -596,7 +668,10 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         int panelWidth = padding * 2 + gridWidth + gap + arrowWidth + gap + cell;
         int panelHeight = padding * 2 + headerHeight + Math.max(gridHeight, cell);
         int x = Math.min(mouseX + scale(12), width - panelWidth - scale(4));
-        int y = Math.min(mouseY + scale(12), height - panelHeight - scale(4));
+        int y = anchorY;
+        if (y + panelHeight > height - scale(4)) {
+            y = anchorY - panelHeight - tooltipGap();
+        }
         x = Math.max(scale(4), x);
         y = Math.max(scale(4), y);
 
@@ -670,7 +745,7 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         return Optional.empty();
     }
 
-    private boolean renderJeiRecipePreview(GuiGraphics graphics, TreeNode node, int mouseX, int mouseY) {
+    private boolean renderJeiRecipePreview(GuiGraphics graphics, TreeNode node, int mouseX, int anchorY) {
         Optional<IRecipeLayoutDrawable<?>> drawableOptional = recipePreviewCache.computeIfAbsent(node.recipe().id(), id -> createRecipePreview(node));
         if (drawableOptional.isEmpty()) {
             return false;
@@ -680,16 +755,23 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         int previewWidth = rect.getWidth();
         int previewHeight = rect.getHeight();
         int x = Math.min(mouseX + scale(12), width - previewWidth - scale(4));
-        int y = Math.min(mouseY + scale(12), height - previewHeight - scale(4));
+        int y = anchorY;
+        if (y + previewHeight > height - scale(4)) {
+            y = anchorY - previewHeight - tooltipGap();
+        }
         x = Math.max(scale(4), x);
         y = Math.max(scale(4), y);
         drawable.setPosition(x, y);
         graphics.pose().pushPose();
         graphics.pose().translate(0, 0, 300);
-        drawable.drawRecipe(graphics, mouseX, mouseY);
-        drawable.drawOverlays(graphics, mouseX, mouseY);
+        drawable.drawRecipe(graphics, mouseX, anchorY);
+        drawable.drawOverlays(graphics, mouseX, anchorY);
         graphics.pose().popPose();
         return true;
+    }
+
+    private int tooltipGap() {
+        return scale(8);
     }
 
     private Optional<IRecipeLayoutDrawable<?>> createRecipePreview(TreeNode node) {
@@ -806,7 +888,7 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
                     openRecipeInJei(selected);
                 } else if (button == 1 && !selected.children().isEmpty()) {
                     dropdownNode = null;
-                    selected.toggleExpanded();
+                    setExpandedForMatchingNodes(selected, !selected.expanded());
                 }
                 return true;
             }
@@ -859,6 +941,14 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         }
         dropdownNode = null;
         return false;
+    }
+
+    private void setExpandedForMatchingNodes(TreeNode source, boolean expanded) {
+        for (TreeNode node : matchingNodes(source.key())) {
+            if (!node.children().isEmpty()) {
+                node.expanded(expanded);
+            }
+        }
     }
 
     private boolean contains(int mouseX, int mouseY, int x, int y, int width, int height) {
