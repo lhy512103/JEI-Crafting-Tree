@@ -1,0 +1,9 @@
+Manifest-Version: 1.0
+Specification-Title: Just Enough Items
+Specification-Vendor: mezz
+Specification-Version: 15.20.0
+Implementation-Title: sourcesJar
+Implementation-Version: 15.20.0.106
+Implementation-Vendor: mezz
+Fabric-Loom-Remap: true
+

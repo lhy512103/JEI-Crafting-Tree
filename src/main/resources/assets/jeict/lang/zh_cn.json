@@ -1,0 +1,18 @@
+{
+  "key.categories.jeict": "JEI 配方树",
+  "key.jeict.open_tree": "打开配方树",
+  "screen.jeict.recipe_tree": "配方树",
+  "screen.jeict.no_recipe": "这个材料没有选中的配方",
+  "screen.jeict.recipe": "配方：%s",
+  "screen.jeict.inputs": "输入材料",
+  "screen.jeict.cycle": "循环",
+  "screen.jeict.limited": "限制",
+  "screen.jeict.total_cost": "总耗材",
+  "screen.jeict.leftovers": "剩余物",
+  "screen.jeict.tooltip_needed": "需要：%s",
+  "screen.jeict.tooltip_recipe": "配方：%s",
+  "screen.jeict.tooltip_batches": "批次数：%s",
+  "screen.jeict.tooltip_leftover": "剩余：%s",
+  "screen.jeict.tooltip_open_jei": "左键打开 JEI 配方页，右键折叠/展开",
+  "screen.jeict.tooltip_batch_edit": "滚动此节点调节批次数，Shift+滚动按 10 调节，也可直接输入数字"
+}

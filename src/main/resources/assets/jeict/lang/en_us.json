@@ -1,0 +1,18 @@
+{
+  "key.categories.jeict": "JEI Crafting Tree",
+  "key.jeict.open_tree": "Open Recipe Tree",
+  "screen.jeict.recipe_tree": "Recipe Tree",
+  "screen.jeict.no_recipe": "No recipe selected for this ingredient",
+  "screen.jeict.recipe": "Recipe: %s",
+  "screen.jeict.inputs": "Inputs",
+  "screen.jeict.cycle": "cycle",
+  "screen.jeict.limited": "limit",
+  "screen.jeict.total_cost": "Total Cost",
+  "screen.jeict.leftovers": "Leftovers",
+  "screen.jeict.tooltip_needed": "Needed: %s",
+  "screen.jeict.tooltip_recipe": "Recipe: %s",
+  "screen.jeict.tooltip_batches": "Batches: %s",
+  "screen.jeict.tooltip_leftover": "Leftover: %s",
+  "screen.jeict.tooltip_open_jei": "Left-click to open this recipe in JEI, right-click to collapse/expand",
+  "screen.jeict.tooltip_batch_edit": "Scroll this node to adjust batches, Shift-scroll by 10, or type a number"
+}
