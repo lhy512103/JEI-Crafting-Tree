@@ -38,6 +38,7 @@ import org.lwjgl.glfw.GLFW;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -158,14 +159,27 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         int scaledSubtree = scale(subtreeWidth);
         int nodeW = scale(nodeWidth(node));
         int nodeH = scale(NODE_HEIGHT);
-        int x = left + scaledSubtree / 2 - nodeW / 2;
-        layoutNodes.add(new LayoutNode(node, x, y, nodeW, nodeH));
-        int childLeft = left;
-        for (TreeNode child : visibleChildren(node)) {
+        int itemCenterX = left + scaledSubtree / 2;
+        int x = itemCenterX - itemCenterOffset(node);
+        layoutNodes.add(new LayoutNode(node, x, y, nodeW, nodeH, itemCenterX, scale(ITEM_ICON_SIZE)));
+        List<TreeNode> children = visibleChildren(node);
+        int childLeft = left + (scaledSubtree - scale(childrenWidth(children))) / 2;
+        for (TreeNode child : children) {
             int childWidth = measure(child);
             layout(child, childLeft, y + scale(LEVEL_GAP), childWidth);
             childLeft += scale(childWidth + SIBLING_GAP);
         }
+    }
+
+    private int childrenWidth(List<TreeNode> children) {
+        int width = 0;
+        for (int i = 0; i < children.size(); i++) {
+            if (i > 0) {
+                width += SIBLING_GAP;
+            }
+            width += measure(children.get(i));
+        }
+        return width;
     }
 
     private int nodeWidth(TreeNode node) {
@@ -174,6 +188,14 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
             contentWidth += RECIPE_ICON_SIZE + NODE_ICON_GAP;
         }
         return NODE_PADDING * 2 + contentWidth;
+    }
+
+    private int itemCenterOffset(TreeNode node) {
+        int itemLeft = scale(NODE_PADDING);
+        if (node.recipe() != null) {
+            itemLeft += scale(RECIPE_ICON_SIZE + NODE_ICON_GAP);
+        }
+        return itemLeft + scale(ITEM_ICON_SIZE) / 2;
     }
 
     private List<TreeNode> visibleChildren(TreeNode node) {
@@ -186,9 +208,18 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
             if (children.isEmpty()) {
                 continue;
             }
-            int parentX = parent.centerX();
+            int parentX = parent.itemCenterX();
             int parentBottom = parent.y() + scale(NODE_HEIGHT);
             int junctionY = parentBottom + scale(NODE_HEIGHT) / 3;
+
+            if (children.size() == 1) {
+                LayoutNode childLayout = layoutFor(children.get(0));
+                if (childLayout != null) {
+                    drawVLine(graphics, parentX, parentBottom, childLayout.y());
+                    renderBatchOnLine(graphics, parent.node(), parentX, parentBottom, junctionY);
+                }
+                continue;
+            }
 
             drawVLine(graphics, parentX, parentBottom, junctionY);
             renderBatchOnLine(graphics, parent.node(), parentX, parentBottom, junctionY);
@@ -198,8 +229,8 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
             for (TreeNode child : children) {
                 LayoutNode childLayout = layoutFor(child);
                 if (childLayout != null) {
-                    minX = Math.min(minX, childLayout.centerX());
-                    maxX = Math.max(maxX, childLayout.centerX());
+                    minX = Math.min(minX, childLayout.itemCenterX());
+                    maxX = Math.max(maxX, childLayout.itemCenterX());
                 }
             }
             if (minX <= maxX) {
@@ -208,7 +239,7 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
             for (TreeNode child : children) {
                 LayoutNode childLayout = layoutFor(child);
                 if (childLayout != null) {
-                    drawVLine(graphics, childLayout.centerX(), junctionY, childLayout.y());
+                    drawVLine(graphics, childLayout.itemCenterX(), junctionY, childLayout.y());
                 }
             }
         }
@@ -265,14 +296,13 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
             }
 
             // 配方图标（左侧）
-            int contentX = layout.x() + scale(NODE_PADDING);
-            int iconAreaLeft = contentX;
+            int itemX = layout.itemCenterX() - scale(ITEM_ICON_SIZE) / 2;
+            int iconAreaLeft = itemX - scale(RECIPE_ICON_SIZE + NODE_ICON_GAP);
             if (node.recipe() != null) {
                 drawRecipeIcon(graphics, node, iconAreaLeft, layout.y() + scale(7));
             }
 
             // 物品图标
-            int itemX = contentX + scale(node.recipe() != null ? RECIPE_ICON_SIZE + NODE_ICON_GAP : 0);
             int itemY = layout.y() + (nh - scale(16)) / 2;
             graphics.pose().pushPose();
             graphics.pose().translate(itemX, itemY, 0);
@@ -323,6 +353,8 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         int height = rows * cell + scale(4);
         int x = layout.x() + layout.width() + scale(4);
         int y = layout.y();
+        graphics.pose().pushPose();
+        graphics.pose().translate(0, 0, 250);
         drawBox(graphics, x, y, width, height, 0xF4EEF1F2, 0xFF87959B);
         for (int i = 0; i < alternatives.size(); i++) {
             int col = i % columns;
@@ -340,6 +372,7 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
             graphics.renderItem(stack, 0, 0);
             graphics.pose().popPose();
         }
+        graphics.pose().popPose();
     }
 
     private int nodeFill(TreeNode node) {
@@ -382,9 +415,13 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         if (costs.isEmpty() && leftovers.isEmpty()) {
             return;
         }
-        int y = root.y() - scale(COST_ROW_HEIGHT * 2 + 8) - scale(22);
+        boolean hasLeftovers = !leftovers.isEmpty();
+        int rowsHeight = hasLeftovers ? COST_ROW_HEIGHT * 2 + 8 : COST_ROW_HEIGHT;
+        int y = root.y() - scale(rowsHeight) - scale(22);
         renderCostStrip(graphics, Component.translatable("screen.jeict.total_cost"), entriesFor(costs, COST_TOTAL_BORDER), root.centerX(), y);
-        renderCostStrip(graphics, Component.translatable("screen.jeict.leftovers"), entriesFor(leftovers, COST_LEFTOVER_BORDER), root.centerX(), y + scale(COST_ROW_HEIGHT + 8));
+        if (hasLeftovers) {
+            renderCostStrip(graphics, Component.translatable("screen.jeict.leftovers"), entriesFor(leftovers, COST_LEFTOVER_BORDER), root.centerX(), y + scale(COST_ROW_HEIGHT + 8));
+        }
     }
 
     private List<CostDisplayEntry> entriesFor(Map<IngredientKey, CostEntry> entries, int border) {
@@ -512,15 +549,120 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
     }
 
     private void renderNodeTooltip(GuiGraphics graphics, int mouseX, int mouseY) {
+        Optional<ItemStack> hoveredAlternative = alternativeAt(mouseX, mouseY);
+        if (hoveredAlternative.isPresent()) {
+            List<Component> lines = hoveredAlternative.get().getTooltipLines(minecraft.player, TooltipFlag.Default.NORMAL);
+            graphics.renderComponentTooltip(font, lines, mouseX, mouseY);
+            return;
+        }
+        for (CostLayout layout : costLayouts) {
+            if (layout.contains(mouseX, mouseY)) {
+                List<Component> lines = layout.stack().getTooltipLines(minecraft.player, TooltipFlag.Default.NORMAL);
+                graphics.renderComponentTooltip(font, lines, mouseX, mouseY);
+                return;
+            }
+        }
         for (LayoutNode layout : layoutNodes) {
             if (!layout.contains(mouseX, mouseY)) {
                 continue;
             }
             TreeNode node = layout.node();
+            if (hasControlDown() && node.recipe() != null && !node.children().isEmpty() && layout.itemContains(mouseX, mouseY)) {
+                renderRecipePreview(graphics, node, mouseX, mouseY);
+                return;
+            }
             List<Component> lines = node.displayStack().getTooltipLines(minecraft.player, TooltipFlag.Default.NORMAL);
             graphics.renderComponentTooltip(font, lines, mouseX, mouseY);
             return;
         }
+    }
+
+    private void renderRecipePreview(GuiGraphics graphics, TreeNode node, int mouseX, int mouseY) {
+        int cell = scale(24);
+        int gap = scale(6);
+        int padding = scale(8);
+        int inputCount = Math.max(1, node.children().size());
+        int columns = Math.min(4, inputCount);
+        int rows = (inputCount + columns - 1) / columns;
+        int gridWidth = columns * cell;
+        int gridHeight = rows * cell;
+        int arrowWidth = scale(18);
+        int headerHeight = scale(18);
+        int panelWidth = padding * 2 + gridWidth + gap + arrowWidth + gap + cell;
+        int panelHeight = padding * 2 + headerHeight + Math.max(gridHeight, cell);
+        int x = Math.min(mouseX + scale(12), width - panelWidth - scale(4));
+        int y = Math.min(mouseY + scale(12), height - panelHeight - scale(4));
+        x = Math.max(scale(4), x);
+        y = Math.max(scale(4), y);
+
+        graphics.pose().pushPose();
+        graphics.pose().translate(0, 0, 300);
+        drawBox(graphics, x, y, panelWidth, panelHeight, 0xF7EEF1F2, 0xFF87959B);
+        String title = node.recipe().id().getPath();
+        int maxTitleWidth = unscale(panelWidth - padding * 2);
+        if (font.width(title) > maxTitleWidth) {
+            title = font.plainSubstrByWidth(title, maxTitleWidth - font.width("...")) + "...";
+        }
+        drawScaledString(graphics, title, x + padding, y + scale(5), 0xFF2F3E43, false);
+
+        int gridX = x + padding;
+        int gridY = y + padding + headerHeight;
+        for (int i = 0; i < node.children().size(); i++) {
+            TreeNode child = node.children().get(i);
+            int col = i % columns;
+            int row = i / columns;
+            int itemX = gridX + col * cell + scale(4);
+            int itemY = gridY + row * cell + scale(4);
+            renderPreviewItem(graphics, displayStackFor(child), itemX, itemY);
+        }
+
+        int arrowX = gridX + gridWidth + gap;
+        int arrowY = gridY + Math.max(0, (Math.max(gridHeight, cell) - scale(8)) / 2);
+        graphics.fill(arrowX, arrowY + scale(3), arrowX + arrowWidth - scale(4), arrowY + scale(5), 0xFF3F4C51);
+        graphics.fill(arrowX + arrowWidth - scale(6), arrowY, arrowX + arrowWidth - scale(4), arrowY + scale(8), 0xFF3F4C51);
+        graphics.fill(arrowX + arrowWidth - scale(4), arrowY + scale(1), arrowX + arrowWidth - scale(2), arrowY + scale(7), 0xFF3F4C51);
+
+        int outputX = arrowX + arrowWidth + gap + scale(4);
+        int outputY = gridY + Math.max(0, (Math.max(gridHeight, cell) - scale(16)) / 2);
+        renderPreviewItem(graphics, displayStackFor(node), outputX, outputY);
+        graphics.pose().popPose();
+    }
+
+    private void renderPreviewItem(GuiGraphics graphics, ItemStack stack, int x, int y) {
+        graphics.pose().pushPose();
+        graphics.pose().translate(x, y, 0);
+        graphics.pose().scale((float) zoom, (float) zoom, 1);
+        graphics.renderItem(stack, 0, 0);
+        graphics.renderItemDecorations(font, stack, 0, 0);
+        graphics.pose().popPose();
+    }
+
+    private Optional<ItemStack> alternativeAt(int mouseX, int mouseY) {
+        if (dropdownNode == null) {
+            return Optional.empty();
+        }
+        LayoutNode layout = layoutFor(dropdownNode);
+        if (layout == null) {
+            return Optional.empty();
+        }
+        List<ItemStack> alternatives = dropdownNode.alternatives();
+        if (alternatives.size() <= 1) {
+            return Optional.empty();
+        }
+        int cell = scale(22);
+        int columns = Math.min(6, alternatives.size());
+        int x = layout.x() + layout.width() + scale(4);
+        int y = layout.y();
+        for (int i = 0; i < alternatives.size(); i++) {
+            int col = i % columns;
+            int row = i / columns;
+            int cellX = x + scale(2) + col * cell;
+            int cellY = y + scale(2) + row * cell;
+            if (contains(mouseX, mouseY, cellX, cellY, cell, cell)) {
+                return Optional.of(alternatives.get(i));
+            }
+        }
+        return Optional.empty();
     }
 
     private void drawRecipeIcon(GuiGraphics graphics, TreeNode node, int x, int y) {
@@ -586,7 +728,7 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
     }
 
     private int lineThickness() {
-        return Math.max(2, scale(2));
+        return Math.max(1, scale(1));
     }
 
     @Override
@@ -780,6 +922,10 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         return Math.max(1, (int) Math.round(value * zoom));
     }
 
+    private int unscale(int value) {
+        return Math.max(1, (int) Math.floor(value / zoom));
+    }
+
     private boolean canEditBatches(TreeNode node) {
         return node == tree.root() && node.recipe() != null;
     }
@@ -795,8 +941,42 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         if (selected == null) {
             return;
         }
-        Map<IngredientKey, ItemStack> displayStacks = new HashMap<>();
-        Map<IngredientKey, Integer> counts = new HashMap<>();
+        InputData slotInputData = collectInputs(recipeSlots);
+        InputData inputData = slotInputData;
+        if (recipe instanceof Recipe<?> minecraftRecipe) {
+            List<Ingredient> ingredients = minecraftRecipe.getIngredients();
+            InputData recipeInputData = collectInputs(ingredients);
+            if (!recipeInputData.counts().isEmpty() && recipeInputData.counts().size() == slotInputData.counts().size()) {
+                inputData = recipeInputData;
+            } else if (!slotInputData.counts().isEmpty()) {
+                inputData = slotInputData.withAlternativesFrom(ingredients);
+            } else {
+                inputData = recipeInputData;
+            }
+        }
+        if (inputData.counts().isEmpty()) {
+            return;
+        }
+
+        ItemStack output = extractOutputStack(recipe, recipeSlots);
+        if (!selected.key().matches(output)) {
+            return;
+        }
+        if (recipe instanceof Recipe<?> minecraftRecipe) {
+            RecipeSelectionMemory.remember(output, minecraftRecipe.getId());
+        }
+        List<TreeNode> matchingNodes = matchingNodes(selected.key());
+        for (TreeNode node : matchingNodes) {
+            applyRecipeSelection(node, recipe, output, inputData);
+        }
+        recipeIconCache.clear();
+        batchInput = "";
+    }
+
+    private InputData collectInputs(IRecipeSlotsView recipeSlots) {
+        Map<IngredientKey, ItemStack> displayStacks = new LinkedHashMap<>();
+        Map<IngredientKey, Integer> counts = new LinkedHashMap<>();
+        Map<IngredientKey, List<ItemStack>> alternativesByKey = new LinkedHashMap<>();
         for (IRecipeSlotView slot : recipeSlots.getSlotViews()) {
             if (slot.getRole() != RecipeIngredientRole.INPUT) {
                 continue;
@@ -812,24 +992,55 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
             IngredientKey key = IngredientKey.of(stack);
             displayStacks.putIfAbsent(key, stack);
             counts.merge(key, count, Integer::sum);
+            List<ItemStack> alternatives = slot.getItemStacks()
+                    .filter(candidate -> !candidate.isEmpty())
+                    .map(candidate -> {
+                        ItemStack alternative = candidate.copy();
+                        alternative.setCount(1);
+                        return alternative;
+                    })
+                    .toList();
+            if (!alternatives.isEmpty()) {
+                alternativesByKey.putIfAbsent(key, alternatives);
+            }
         }
-        if (counts.isEmpty()) {
-            return;
-        }
+        return new InputData(displayStacks, counts, alternativesByKey);
+    }
 
-        ItemStack output = extractOutputStack(recipe, recipeSlots);
-        if (!selected.key().matches(output)) {
-            return;
+    private InputData collectInputs(List<Ingredient> ingredients) {
+        Map<IngredientKey, ItemStack> displayStacks = new LinkedHashMap<>();
+        Map<IngredientKey, Integer> counts = new LinkedHashMap<>();
+        Map<IngredientKey, List<ItemStack>> alternativesByKey = new LinkedHashMap<>();
+        for (Ingredient ingredient : ingredients) {
+            ItemStack[] alternatives = ingredient.getItems();
+            if (alternatives.length == 0) {
+                continue;
+            }
+            ItemStack childStack = RecipeSelectionMemory.selectedAlternative(alternatives[0])
+                    .filter(ingredient::test)
+                    .orElse(alternatives[0])
+                    .copy();
+            int count = Math.max(1, childStack.getCount());
+            childStack.setCount(1);
+            IngredientKey key = IngredientKey.of(childStack);
+            displayStacks.putIfAbsent(key, childStack);
+            counts.merge(key, count, Integer::sum);
+            alternativesByKey.putIfAbsent(key, normalizeAlternatives(alternatives));
         }
-        if (recipe instanceof Recipe<?> minecraftRecipe) {
-            RecipeSelectionMemory.remember(output, minecraftRecipe.getId());
+        return new InputData(displayStacks, counts, alternativesByKey);
+    }
+
+    private List<ItemStack> normalizeAlternatives(ItemStack[] alternatives) {
+        List<ItemStack> stacks = new ArrayList<>();
+        for (ItemStack alternative : alternatives) {
+            if (alternative.isEmpty()) {
+                continue;
+            }
+            ItemStack stack = alternative.copy();
+            stack.setCount(1);
+            stacks.add(stack);
         }
-        List<TreeNode> matchingNodes = matchingNodes(selected.key());
-        for (TreeNode node : matchingNodes) {
-            applyRecipeSelection(node, recipe, output, displayStacks, counts);
-        }
-        recipeIconCache.clear();
-        batchInput = "";
+        return stacks;
     }
 
     private void selectAlternative(TreeNode node, ItemStack alternative) {
@@ -864,7 +1075,7 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         node.alternatives(alternatives);
     }
 
-    private void applyRecipeSelection(TreeNode node, Object recipe, ItemStack output, Map<IngredientKey, ItemStack> displayStacks, Map<IngredientKey, Integer> counts) {
+    private void applyRecipeSelection(TreeNode node, Object recipe, ItemStack output, InputData inputData) {
         int outputCount = Math.max(1, output.getCount());
         int batches = Math.max(1, (node.amount() + outputCount - 1) / outputCount);
 
@@ -881,12 +1092,13 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
 
         Minecraft minecraft = Minecraft.getInstance();
         Optional<RecipeGraphCache> cache = RecipeGraphCache.get(minecraft);
-        for (Map.Entry<IngredientKey, Integer> entry : counts.entrySet()) {
-            ItemStack childStack = displayStacks.get(entry.getKey()).copy();
+        for (Map.Entry<IngredientKey, Integer> entry : inputData.counts().entrySet()) {
+            ItemStack childStack = inputData.displayStacks().get(entry.getKey()).copy();
             int amount = entry.getValue() * batches;
             TreeNode child = cache
                     .map(graph -> graph.createNode(childStack, amount, node.depth() + 1))
                     .orElseGet(() -> new TreeNode(entry.getKey(), childStack, amount, node.depth() + 1));
+            child.alternatives(inputData.alternativesByKey().getOrDefault(entry.getKey(), List.of()));
             node.children().add(child);
         }
     }
@@ -1011,13 +1223,19 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         }
     }
 
-    private record LayoutNode(TreeNode node, int x, int y, int width, int height) {
+    private record LayoutNode(TreeNode node, int x, int y, int width, int height, int itemCenterX, int itemSize) {
         int centerX() {
             return x + width / 2;
         }
 
         boolean contains(int mouseX, int mouseY) {
             return mouseX >= x && mouseX < x + width && mouseY >= y && mouseY < y + height;
+        }
+
+        boolean itemContains(int mouseX, int mouseY) {
+            int left = itemCenterX - itemSize / 2;
+            int top = y + (height - itemSize) / 2;
+            return mouseX >= left && mouseX < left + itemSize && mouseY >= top && mouseY < top + itemSize;
         }
     }
 
@@ -1036,6 +1254,38 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
     private record CostLayout(ItemStack stack, int x, int y, int width, int height) {
         boolean contains(int mouseX, int mouseY) {
             return mouseX >= x && mouseX < x + width && mouseY >= y && mouseY < y + height;
+        }
+    }
+
+    private record InputData(Map<IngredientKey, ItemStack> displayStacks,
+                             Map<IngredientKey, Integer> counts,
+                             Map<IngredientKey, List<ItemStack>> alternativesByKey) {
+        private InputData withAlternativesFrom(List<Ingredient> ingredients) {
+            Map<IngredientKey, List<ItemStack>> mergedAlternatives = new LinkedHashMap<>(alternativesByKey);
+            for (Ingredient ingredient : ingredients) {
+                ItemStack[] alternatives = ingredient.getItems();
+                if (alternatives.length <= 1) {
+                    continue;
+                }
+                List<ItemStack> normalized = new ArrayList<>();
+                for (ItemStack alternative : alternatives) {
+                    if (alternative.isEmpty()) {
+                        continue;
+                    }
+                    ItemStack stack = alternative.copy();
+                    stack.setCount(1);
+                    normalized.add(stack);
+                }
+                if (normalized.isEmpty()) {
+                    continue;
+                }
+                for (Map.Entry<IngredientKey, ItemStack> entry : displayStacks.entrySet()) {
+                    if (ingredient.test(entry.getValue())) {
+                        mergedAlternatives.putIfAbsent(entry.getKey(), normalized);
+                    }
+                }
+            }
+            return new InputData(displayStacks, counts, mergedAlternatives);
         }
     }
 
