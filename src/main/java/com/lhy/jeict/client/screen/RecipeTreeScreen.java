@@ -570,7 +570,7 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
                 continue;
             }
             TreeNode node = layout.node();
-            if (hasControlDown() && node.recipe() != null && !node.children().isEmpty() && layout.itemContains(mouseX, mouseY)) {
+            if (node.recipe() != null && !node.children().isEmpty() && layout.itemContains(mouseX, mouseY)) {
                 if (!renderJeiRecipePreview(graphics, node, mouseX, mouseY)) {
                     renderRecipePreview(graphics, node, mouseX, mouseY);
                 }
