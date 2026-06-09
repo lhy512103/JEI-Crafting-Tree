@@ -8,6 +8,7 @@ import com.lhy.jeict.tree.RecipeSelectionMemory;
 import com.lhy.jeict.tree.RecipeTree;
 import com.lhy.jeict.tree.TreeNode;
 import mezz.jei.api.constants.VanillaTypes;
+import mezz.jei.api.gui.IRecipeLayoutDrawable;
 import mezz.jei.api.gui.drawable.IDrawable;
 import mezz.jei.api.gui.ingredient.IRecipeSlotView;
 import mezz.jei.api.gui.ingredient.IRecipeSlotsView;
@@ -26,6 +27,7 @@ import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.client.renderer.Rect2i;
 import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
@@ -65,6 +67,7 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
     private final List<LayoutNode> layoutNodes = new ArrayList<>();
     private final List<CostLayout> costLayouts = new ArrayList<>();
     private final Map<ResourceLocation, Optional<IDrawable>> recipeIconCache = new HashMap<>();
+    private final Map<ResourceLocation, Optional<IRecipeLayoutDrawable<?>>> recipePreviewCache = new HashMap<>();
     private double zoom = 1.0;
     private int panX;
     private int panY;
@@ -568,7 +571,9 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
             }
             TreeNode node = layout.node();
             if (hasControlDown() && node.recipe() != null && !node.children().isEmpty() && layout.itemContains(mouseX, mouseY)) {
-                renderRecipePreview(graphics, node, mouseX, mouseY);
+                if (!renderJeiRecipePreview(graphics, node, mouseX, mouseY)) {
+                    renderRecipePreview(graphics, node, mouseX, mouseY);
+                }
                 return;
             }
             List<Component> lines = node.displayStack().getTooltipLines(minecraft.player, TooltipFlag.Default.NORMAL);
@@ -663,6 +668,42 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
             }
         }
         return Optional.empty();
+    }
+
+    private boolean renderJeiRecipePreview(GuiGraphics graphics, TreeNode node, int mouseX, int mouseY) {
+        Optional<IRecipeLayoutDrawable<?>> drawableOptional = recipePreviewCache.computeIfAbsent(node.recipe().id(), id -> createRecipePreview(node));
+        if (drawableOptional.isEmpty()) {
+            return false;
+        }
+        IRecipeLayoutDrawable<?> drawable = drawableOptional.get();
+        Rect2i rect = drawable.getRectWithBorder();
+        int previewWidth = rect.getWidth();
+        int previewHeight = rect.getHeight();
+        int x = Math.min(mouseX + scale(12), width - previewWidth - scale(4));
+        int y = Math.min(mouseY + scale(12), height - previewHeight - scale(4));
+        x = Math.max(scale(4), x);
+        y = Math.max(scale(4), y);
+        drawable.setPosition(x, y);
+        graphics.pose().pushPose();
+        graphics.pose().translate(0, 0, 300);
+        drawable.drawRecipe(graphics, mouseX, mouseY);
+        drawable.drawOverlays(graphics, mouseX, mouseY);
+        graphics.pose().popPose();
+        return true;
+    }
+
+    private Optional<IRecipeLayoutDrawable<?>> createRecipePreview(TreeNode node) {
+        return JeiRuntimeAccess.get().flatMap(runtime -> {
+            List<IFocus<?>> focuses = List.of(createOutputFocus(runtime, node));
+            return findRecipeMatch(runtime, node.recipe(), focuses)
+                    .flatMap(match -> createRecipeLayoutDrawable(runtime, match, focuses));
+        });
+    }
+
+    private <T> Optional<IRecipeLayoutDrawable<?>> createRecipeLayoutDrawable(IJeiRuntime runtime, JeiRecipeMatch<T> match, List<IFocus<?>> focuses) {
+        return runtime.getRecipeManager()
+                .createRecipeLayoutDrawable(match.category(), match.recipe(), runtime.getJeiHelpers().getFocusFactory().createFocusGroup(focuses))
+                .map(drawable -> drawable);
     }
 
     private void drawRecipeIcon(GuiGraphics graphics, TreeNode node, int x, int y) {
@@ -970,6 +1011,7 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
             applyRecipeSelection(node, recipe, output, inputData);
         }
         recipeIconCache.clear();
+        recipePreviewCache.clear();
         batchInput = "";
     }
 
@@ -1053,6 +1095,7 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         selected = node;
         batchInput = "";
         recipeIconCache.clear();
+        recipePreviewCache.clear();
     }
 
     private void rebuildSelectedNode(TreeNode node) {
