@@ -129,7 +129,8 @@ public final class RecipeTreeNodeViewModel {
         if (denominator <= 0) {
             return numerator;
         }
-        return (numerator + denominator - 1) / denominator;
+        long value = ((long) numerator + (long) denominator - 1L) / (long) denominator;
+        return (int) Math.min(Integer.MAX_VALUE, Math.max(1L, value));
     }
 
     public static final class LeafAccumulator {

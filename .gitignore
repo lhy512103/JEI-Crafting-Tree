@@ -1,6 +1,7 @@
 # Gradle
 .gradle/
 build/
+bin/
 out/
 
 # Minecraft / NeoForge run directories

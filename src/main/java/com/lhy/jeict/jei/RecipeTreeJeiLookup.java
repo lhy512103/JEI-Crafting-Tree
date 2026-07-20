@@ -2,6 +2,7 @@ package com.lhy.jeict.jei;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +39,9 @@ import mezz.jei.api.runtime.IJeiRuntime;
 import mezz.jei.api.neoforge.NeoForgeTypes;
 
 public final class RecipeTreeJeiLookup {
+    private static final Map<ResourceLocation, RecipeHandle> RECIPE_ID_INDEX = new HashMap<>();
+    private static @Nullable IJeiRuntime recipeIdIndexRuntime;
+
     private RecipeTreeJeiLookup() {
     }
 
@@ -94,13 +98,35 @@ public final class RecipeTreeJeiLookup {
             return Optional.empty();
         }
 
+        ensureRecipeIdIndex(runtime);
+        RecipeHandle handle = RECIPE_ID_INDEX.get(recipeId);
+        return handle == null ? Optional.empty() : createSnapshotForRecipe(runtime, handle.category(), handle.recipe());
+    }
+
+    @SuppressWarnings({ "rawtypes", "unchecked" })
+    private static void ensureRecipeIdIndex(IJeiRuntime runtime) {
+        if (recipeIdIndexRuntime == runtime) {
+            return;
+        }
+        RECIPE_ID_INDEX.clear();
+        recipeIdIndexRuntime = runtime;
         for (RecipeType<?> recipeType : getOrderedRecipeTypes(runtime)) {
-            Optional<RecipeTreeRecipeViewModel> match = findRecipeByIdInType(runtime, recipeType, recipeId);
-            if (match.isPresent()) {
-                return match;
+            IRecipeCategory category = runtime.getRecipeManager().getRecipeCategory((RecipeType) recipeType);
+            if (category == null) {
+                continue;
+            }
+            List<?> recipes = runtime.getRecipeManager()
+                    .createRecipeLookup((RecipeType) recipeType)
+                    .includeHidden()
+                    .get()
+                    .toList();
+            for (Object recipe : recipes) {
+                ResourceLocation indexedId = category.getRegistryName(recipe);
+                if (indexedId != null) {
+                    RECIPE_ID_INDEX.putIfAbsent(indexedId, new RecipeHandle(category, recipe));
+                }
             }
         }
-        return Optional.empty();
     }
 
     @SuppressWarnings({ "rawtypes", "unchecked" })
@@ -174,6 +200,9 @@ public final class RecipeTreeJeiLookup {
     private static Optional<RecipeTreeRecipeViewModel> createSnapshotForRecipe(IJeiRuntime runtime, IRecipeCategory category,
             Object recipe) {
         return createSnapshotForRecipeTyped(runtime, category, recipe);
+    }
+
+    private record RecipeHandle(IRecipeCategory<?> category, Object recipe) {
     }
 
     private static <T> Optional<RecipeTreeRecipeViewModel> createSnapshotForRecipeTyped(IJeiRuntime runtime,

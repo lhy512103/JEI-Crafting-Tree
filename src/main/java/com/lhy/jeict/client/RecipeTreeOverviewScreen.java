@@ -1,13 +1,17 @@
 package com.lhy.jeict.client;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.NavigableMap;
 
 import org.jetbrains.annotations.Nullable;
 
@@ -42,44 +46,98 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
 
 public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTransferTarget {
-    private static final int NODE_HEIGHT = 26;
-    private static final int LEVEL_GAP = 44;
-    private static final int LEAF_GAP = 16;
-    private static final int AUTO_EXPAND_STEPS_PER_TICK = 1;
+    private static final int NODE_HEIGHT = 28;
+    private static final int NODE_MAIN_SIZE = 28;
+    private static final int NODE_PART_GAP = 2;
+    private static final int NODE_PART_PADDING = 2;
+    private static final int LEVEL_GAP = 46;
+    private static final int LEAF_GAP = 6;
+    private static final int AUTO_EXPAND_STEPS_PER_TICK = 32;
     private static final int VISIBILITY_MARGIN = 32;
-    private static final int BG_TILE_WIDTH = 256;
-    private static final int BG_TILE_HEIGHT = 256;
+    private static final int HEADER_HEIGHT = 36;
+    private static final int FOOTER_HEIGHT = 34;
+    private static final double INITIAL_MIN_ZOOM = 0.7D;
+    private static final double INITIAL_MAX_ZOOM = 1.0D;
     private static final int MACHINE_SLOT_SIZE = 18;
     /** 与样板编码终端/JEI 开关同源图标（8×8 纹理缩放绘制） */
     private static final int SUBSTITUTION_ICON_SRC = 8;
     private static final int SUBSTITUTION_ICON_DST = 16;
-    private static final int TOP_MATERIALS_OFFSET = 48;
+    private static final int TOP_MATERIALS_OFFSET = 100;
+    private static final int INSPECTOR_WIDTH = 216;
+    private static final int SETTINGS_WIDTH = 148;
+    private static final int SETTINGS_COLLAPSED_WIDTH = 34;
+    private static final int BATCH_TEXT_GAP = 3;
 
     private final RecipeTreeRootContext context;
     private final Screen returnScreen;
     private final List<PositionedNode> positionedNodes = new ArrayList<>();
+    private final List<PositionedNode> visiblePositionedNodes = new ArrayList<>();
     private final List<Edge> edges = new ArrayList<>();
+    private final NavigableMap<Integer, List<PositionedNode>> positionedNodeRows = new TreeMap<>();
+    private final NavigableMap<Integer, List<Edge>> edgeRows = new TreeMap<>();
+    private final Map<LayerRow, LayerRowRenderCache> mergedRowRenderCaches = new IdentityHashMap<>();
+    private final Map<GraphNode, Integer> graphSubtreeWidthCache = new IdentityHashMap<>();
+    private final Map<RecipeTreeRecipeViewModel, Boolean> existingPatternRecipeCache = new IdentityHashMap<>();
+    private final Map<String, Boolean> existingPatternMaterialCache = new HashMap<>();
+    private final Map<String, List<UnresolvedInputSlot>> unresolvedInputsBySignature = new HashMap<>();
+    private final Map<RecipeTreeInputViewModel, CachedInputSignature> inputSignatureCache = new IdentityHashMap<>();
+    private final Map<RecipeTreeInputViewModel, CachedLayerMaterialKey> leafLayerKeyCache = new IdentityHashMap<>();
+    private final Map<RecipeTreeNodeViewModel, LayerMaterialKey> recipeLayerKeyCache = new IdentityHashMap<>();
+    private final Map<ITypedIngredient<?>, String> typedIngredientSignatureCache = new IdentityHashMap<>();
     private final List<TopMaterialBounds> topMaterialBounds = new ArrayList<>();
+    private final List<TopMaterialBounds> surplusMaterialBounds = new ArrayList<>();
+    private final List<GenericTopMaterialBounds> genericTopMaterialBounds = new ArrayList<>();
     private final List<AlternativeButtonBounds> alternativeButtonBounds = new ArrayList<>();
     private final List<AlternativeOptionBounds> alternativeOptionBounds = new ArrayList<>();
     private final List<LayerMaterialBounds> layerMaterialBounds = new ArrayList<>();
     private @Nullable TopMaterialsPinButtonBounds topMaterialsPinButtonBounds;
     private List<RequestedIngredient> topMaterials = List.of();
+    private List<RequestedIngredient> surplusMaterials = List.of();
+    /**
+     * Render-time projection for the top-material strip. Inventory lookups and
+     * label width calculation are kept out of the frame loop; this list is
+     * refreshed when the layout, theme, or player inventory changes.
+     */
+    private List<TopMaterialRenderData> topMaterialRenderData = List.of();
+    private List<TopMaterialRenderData> surplusMaterialRenderData = List.of();
+    private List<GenericTopMaterialRenderData> genericTopMaterialRenderData = List.of();
+    private boolean topMaterialRenderCacheDirty = true;
+    private boolean topMaterialPatternHintsDirty = true;
+    private int topMaterialInventoryVersion = Integer.MIN_VALUE;
+    private @Nullable Inventory topMaterialInventory;
+    private int cachedMissingMaterialCount;
     private List<LayerRow> mergedLayerRows = List.of();
+    /** Recomputed only when the layer projection changes; render() reads this on every frame. */
+    private int cachedMergedContentWidth = 1;
+    private int cachedMergedAnchorOffset;
 
     private GraphNode rootNode;
     private Button backButton;
     private Button toggleExistingPatternButton;
     private Button autoUniqueRecipeButton;
+    private Button memoryReadingButton;
     private Button autoMergeButton;
     private Button styleButton;
     private Button encodeButton;
     private Button uploadButton;
+    private Button zoomOutButton;
+    private Button zoomInButton;
+    private Button fitViewButton;
+    private Button settingsButton;
+    private @Nullable BatchBadgeBounds batchBadgeBounds;
     private double panX;
     private double panY;
     private double zoom = 1.0;
+    private double visibleLogicalMinX;
+    private double visibleLogicalMaxX;
+    private double visibleLogicalMinY;
+    private double visibleLogicalMaxY;
     private boolean initializedPan;
     private int alternativeScroll;
+    private int toolbarLeft;
+    private boolean settingsOpen;
+    private @Nullable PositionedNode selectedNode;
+    private @Nullable LayerMaterial selectedLayerMaterial;
     private int cachedRequiredPatternCount;
     private Component cachedRequiredPatternsTitleLine = Component.empty();
     private boolean autoMergeSameMaterials = true;
@@ -90,6 +148,10 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private boolean autoExpandUniqueEncodableRecipe = false;
     private boolean suppressAutoExpandUniqueRecipePass;
     private boolean autoExpandUniqueSearchPending;
+    private boolean readRememberedSelections;
+    private boolean rememberedSelectionsDirty = true;
+    private int batchCount = 1;
+    private final Set<String> manuallyCollapsedSignatures = new HashSet<>();
     private final Map<String, Optional<RecipeTreeRecipeViewModel>> autoExpandUniqueCandidateCache = new HashMap<>();
     private @Nullable PendingJeiSelection pendingJeiSelection;
     private @Nullable PendingAlternativeSelection pendingAlternativeSelection;
@@ -104,14 +166,15 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         super(Component.translatable("gui.jeict.recipe_tree.overview_title"));
         this.context = context;
         this.returnScreen = returnScreen;
+        this.readRememberedSelections = RecipeTreeClientMemory.isMemoryReadingEnabled();
     }
 
     @Override
     protected void init() {
         super.init();
-        this.backButton = Button.builder(Component.translatable("gui.jeict.recipe_tree.back"),
-                btn -> onClose()).bounds(this.width - 68, 10, 60, 20).build();
-        this.toggleExistingPatternButton = Button.builder(Component.empty(),
+        this.backButton = chromeButton(8, 8, 50, 20,
+                Component.translatable("gui.jeict.recipe_tree.back"), btn -> onClose());
+        this.toggleExistingPatternButton = chromeButton(this.width - 220, 8, 86, 18, Component.empty(),
                 btn -> {
                     context.setDisableExistingPatternExpansion(!context.disableExistingPatternExpansion());
                     if (context.disableExistingPatternExpansion()) {
@@ -119,52 +182,76 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                     }
                     syncToggleExistingPatternButton();
                     rebuildLayout();
-                }).bounds(this.width - 212, 10, 68, 20).build();
-        this.autoUniqueRecipeButton = Button.builder(Component.empty(),
+                });
+        this.autoUniqueRecipeButton = chromeButton(this.width - 296, 8, 72, 18, Component.empty(),
                 btn -> {
                     autoExpandUniqueEncodableRecipe = !autoExpandUniqueEncodableRecipe;
                     markAutoExpandUniqueDirty();
                     syncAutoUniqueRecipeButton();
                     rebuildLayout();
-                }).bounds(this.width - 284, 10, 68, 20).build();
-        this.computeQuantitiesButton = Button.builder(Component.empty(),
+                });
+        this.memoryReadingButton = chromeButton(this.width - 372, 8, 72, 18, Component.empty(),
+                btn -> {
+                    readRememberedSelections = !readRememberedSelections;
+                    rememberedSelectionsDirty = readRememberedSelections;
+                    RecipeTreeClientMemory.setMemoryReadingEnabled(readRememberedSelections);
+                    syncMemoryReadingButton();
+                    rebuildLayout();
+                });
+        this.computeQuantitiesButton = chromeButton(this.width - 372, 8, 64, 18, Component.empty(),
                 btn -> {
                     computeRecipeQuantities = !computeRecipeQuantities;
                     syncComputeQuantitiesButton();
                     refreshRenderedProjection();
-                }).bounds(this.width - 356, 10, 68, 20).build();
-        this.autoMergeButton = Button.builder(Component.empty(),
+                });
+        this.autoMergeButton = chromeButton(this.width - 148, 8, 68, 18, Component.empty(),
                 btn -> {
                     autoMergeSameMaterials = !autoMergeSameMaterials;
                     syncAutoMergeButton();
                     rebuildLayout();
-                }).bounds(this.width - 140, 10, 68, 20).build();
-        this.styleButton = Button.builder(Component.empty(),
+                });
+        this.styleButton = chromeButton(this.width - 448, 8, 72, 18, Component.empty(),
                 btn -> {
                     RecipeTreeTheme.toggle();
+                    topMaterialRenderCacheDirty = true;
                     syncStyleButton();
-                }).bounds(this.width - 428, 10, 68, 20).build();
-        this.encodeButton = Button.builder(Component.translatable("gui.jeict.recipe_tree.encode"),
-                btn -> encodePatterns()).bounds(this.width / 2 - 62, this.height - 26, 60, 22).build();
-        this.uploadButton = Button.builder(Component.translatable("gui.jeict.recipe_tree.upload"),
-                btn -> uploadPatterns()).bounds(this.width / 2 + 4, this.height - 26, 60, 22).build();
+                });
+        this.zoomOutButton = chromeButton(this.width - 180, 8, 22, 20, Component.literal("−"), btn -> zoomAtCenter(-0.1D));
+        this.zoomInButton = chromeButton(this.width - 106, 8, 22, 20, Component.literal("+"), btn -> zoomAtCenter(0.1D));
+        this.fitViewButton = chromeButton(this.width - 80, 8, 42, 20,
+                Component.translatable("gui.jeict.recipe_tree.overview_fit"), btn -> fitCurrentView());
+        this.settingsButton = chromeButton(this.width - 34, 8, 26, 20, Component.literal("⋮"), btn -> {
+            settingsOpen = !settingsOpen;
+            updateSelectionButtons();
+        });
+        this.encodeButton = chromeButton(this.width / 2 - 74, this.height - 26, 70, 20,
+                Component.translatable("gui.jeict.recipe_tree.encode"), btn -> encodePatterns());
+        this.uploadButton = chromeButton(this.width / 2 + 4, this.height - 26, 70, 20,
+                Component.translatable("gui.jeict.recipe_tree.upload"), btn -> uploadPatterns());
 
         this.addRenderableWidget(backButton);
         this.addRenderableWidget(computeQuantitiesButton);
         this.addRenderableWidget(styleButton);
         this.addRenderableWidget(toggleExistingPatternButton);
         this.addRenderableWidget(autoUniqueRecipeButton);
+        this.addRenderableWidget(memoryReadingButton);
         this.addRenderableWidget(autoMergeButton);
+        this.addRenderableWidget(zoomOutButton);
+        this.addRenderableWidget(zoomInButton);
+        this.addRenderableWidget(fitViewButton);
+        this.addRenderableWidget(settingsButton);
         this.addRenderableWidget(encodeButton);
         this.addRenderableWidget(uploadButton);
         syncComputeQuantitiesButton();
         syncStyleButton();
         syncToggleExistingPatternButton();
         syncAutoUniqueRecipeButton();
+        syncMemoryReadingButton();
         syncAutoMergeButton();
         updateSelectionButtons();
         rebuildLayout();
     }
+
 
     @Override
     public void tick() {
@@ -174,9 +261,12 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             refreshCraftableDependentCaches();
         }
         processAutoExpandUniqueRecipeSteps(AUTO_EXPAND_STEPS_PER_TICK);
+        refreshTopMaterialRenderCacheIfNeeded();
     }
 
     private void rebuildLayout() {
+        selectedNode = null;
+        selectedLayerMaterial = null;
         long startedAt = RecipeTreePerfDebug.begin();
         rebuildLayoutStructureCore();
         refreshLayoutDerivedCaches();
@@ -191,6 +281,8 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
      * 数量/提示类开关变化时，只重建渲染投影，不再次跑自动展开流程。
      */
     private void refreshRenderedProjection() {
+        selectedNode = null;
+        selectedLayerMaterial = null;
         long startedAt = RecipeTreePerfDebug.begin();
         rebuildLayoutStructureCore();
         refreshLayoutDerivedCaches();
@@ -223,10 +315,14 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
 
     private void refreshCraftableDependentCaches() {
         long startedAt = RecipeTreePerfDebug.begin();
+        existingPatternRecipeCache.clear();
+        existingPatternMaterialCache.clear();
         if (!computeRecipeQuantities) {
             RecipeTreePerfDebug.logPhase("refresh_craftable_dependent_skip", startedAt, "qty=false");
             return;
         }
+        topMaterialRenderCacheDirty = true;
+        topMaterialPatternHintsDirty = true;
         cachedRequiredPatternCount = computeRequiredPatternCountUncached(context.collectSelectedRecipes());
         rebuildRequiredPatternsTitleComponent();
         if (!autoMergeSameMaterials || mergedLayerRows.isEmpty()) {
@@ -251,6 +347,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             rebuilt.add(new LayerRow(row.depth(), List.copyOf(mats)));
         }
         mergedLayerRows = List.copyOf(rebuilt);
+        refreshMergedContentWidth();
         RecipeTreePerfDebug.logPhase("refresh_craftable_dependent", startedAt,
                 "merge={} rows={} changedHints={} requiredPatterns={}",
                 autoMergeSameMaterials, mergedLayerRows.size(), changedHints, cachedRequiredPatternCount);
@@ -259,9 +356,15 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private void rebuildLayoutStructureCore() {
         long startedAt = RecipeTreePerfDebug.begin();
         long structureBuildStartedAt = RecipeTreePerfDebug.begin();
+        if (readRememberedSelections && rememberedSelectionsDirty) {
+            autoApplyRememberedChildren(context.root());
+            rememberedSelectionsDirty = false;
+        }
+        graphSubtreeWidthCache.clear();
         if (autoMergeSameMaterials) {
             this.rootNode = null;
-            this.mergedLayerRows = buildMergedLayerRows(context.root(), 1);
+            this.mergedLayerRows = buildMergedLayerRows(context.root(), batchCount);
+            refreshMergedContentWidth();
             if (lastMergedBuildStats != null) {
                 RecipeTreePerfDebug.logPhase("build_merged_rows", structureBuildStartedAt,
                         "calls={} recipeNodeAdds={} leafAdds={} aggregatedChildLinks={} rows={} rowMaterials={}",
@@ -270,35 +373,47 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                         lastMergedBuildStats.layerRows, lastMergedBuildStats.layerMaterials);
             }
         } else {
-            this.rootNode = buildGraph(context.root(), 1);
+            this.rootNode = buildGraph(context.root(), batchCount);
             this.mergedLayerRows = List.of();
+            this.cachedMergedContentWidth = 1;
+            this.cachedMergedAnchorOffset = 0;
             lastMergedBuildStats = null;
             RecipeTreePerfDebug.logPhase("build_graph_tree", structureBuildStartedAt,
                     "nodes={} edges={}", positionedNodes.size(), edges.size());
         }
         long topMaterialsStartedAt = RecipeTreePerfDebug.begin();
-        this.topMaterials = context.collectRequestedIngredients();
+        this.genericTopMaterialRenderData = collectGenericTopMaterialRenderData();
+        this.surplusMaterials = computeRecipeQuantities ? context.collectSurplusIngredients(batchCount) : List.of();
+        topMaterialRenderCacheDirty = true;
+        topMaterialPatternHintsDirty = true;
+        refreshTopMaterialRenderCacheIfNeeded();
         RecipeTreePerfDebug.logPhase("collect_top_materials", topMaterialsStartedAt,
                 "count={}", topMaterials.size());
         positionedNodes.clear();
+        visiblePositionedNodes.clear();
         edges.clear();
+        positionedNodeRows.clear();
+        edgeRows.clear();
+        mergedRowRenderCaches.clear();
         layerMaterialBounds.clear();
         if (autoMergeSameMaterials) {
             if (!initializedPan) {
                 int contentWidth = computeMergedLayerContentWidth();
                 int contentHeight = computeMergedLayerContentHeight();
-                panX = this.width * 0.5D - contentWidth / 2.0D;
-                panY = 48D - contentHeight / 2.0D + TOP_MATERIALS_OFFSET;
+                double left = 36.0D;
+                double top = 42.0D + TOP_MATERIALS_OFFSET - NODE_HEIGHT - 28.0D;
+                fitInitialView(left, top, left + contentWidth,
+                        42.0D + TOP_MATERIALS_OFFSET + contentHeight);
                 initializedPan = true;
             }
         } else {
             PositionedNode root = layoutNode(rootNode, 0, 36);
             if (!initializedPan) {
-                panX = this.width * 0.5D - (root.x() + rootNode.width() / 2.0D);
-                panY = 48D - root.y() + TOP_MATERIALS_OFFSET;
+                fitInitialTreeView(root);
                 initializedPan = true;
             }
         }
+        finalizeSpatialIndex();
         RecipeTreePerfDebug.logPhase("rebuild_structure", startedAt,
                 "merge={} nodes={} edges={} rows={} topMaterials={}",
                 autoMergeSameMaterials, positionedNodes.size(), edges.size(), mergedLayerRows.size(), topMaterials.size());
@@ -310,9 +425,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private boolean processAutoExpandUniqueRecipeSteps(int maxSteps) {
         long startedAt = RecipeTreePerfDebug.begin();
         if (suppressAutoExpandUniqueRecipePass || !autoExpandUniqueEncodableRecipe || !autoExpandUniqueSearchPending) {
-            RecipeTreePerfDebug.logPhase("auto_expand_skip", startedAt,
-                    "suppressed={} enabled={} pending={}",
-                    suppressAutoExpandUniqueRecipePass, autoExpandUniqueEncodableRecipe, autoExpandUniqueSearchPending);
+            if (RecipeTreePerfDebug.isEnabled()) {
+                RecipeTreePerfDebug.logPhase("auto_expand_skip", startedAt,
+                        "suppressed={} enabled={} pending={}",
+                        suppressAutoExpandUniqueRecipePass, autoExpandUniqueEncodableRecipe, autoExpandUniqueSearchPending);
+            }
             return false;
         }
         suppressAutoExpandUniqueRecipePass = true;
@@ -320,30 +437,34 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             boolean mutated = false;
             int applied = 0;
             for (int step = 0; step < Math.max(1, maxSteps); step++) {
-                if (!tryAutoExpandUniqueEncodableRecipeSinglePass()) {
+                int appliedThisPass = tryAutoExpandUniqueEncodableRecipeSinglePass();
+                if (appliedThisPass <= 0) {
                     break;
                 }
                 mutated = true;
-                applied++;
-                autoExpandUniqueCandidateCache.clear();
-                rebuildLayoutStructureCore();
+                applied += appliedThisPass;
             }
             if (mutated) {
+                rebuildLayoutStructureCore();
                 refreshLayoutDerivedCaches();
             }
             autoExpandUniqueSearchPending = mutated;
-            RecipeTreePerfDebug.logPhase("auto_expand", startedAt,
-                    "steps={} mutated={} nodes={} edges={} rows={}",
-                    applied, mutated, positionedNodes.size(), edges.size(), mergedLayerRows.size());
+            if (RecipeTreePerfDebug.isEnabled()) {
+                RecipeTreePerfDebug.logPhase("auto_expand", startedAt,
+                        "steps={} mutated={} nodes={} edges={} rows={}",
+                        applied, mutated, positionedNodes.size(), edges.size(), mergedLayerRows.size());
+            }
             return mutated;
         } finally {
             suppressAutoExpandUniqueRecipePass = false;
         }
     }
 
-    private boolean tryAutoExpandUniqueEncodableRecipeSinglePass() {
+    private int tryAutoExpandUniqueEncodableRecipeSinglePass() {
         Map<String, List<UnresolvedInputSlot>> grouped = new LinkedHashMap<>();
+        Map<String, Optional<RecipeTreeRecipeViewModel>> rememberedCache = new HashMap<>();
         collectUnresolvedInputsGrouped(context.root(), grouped);
+        int applied = 0;
         for (List<UnresolvedInputSlot> group : grouped.values()) {
             if (group.isEmpty()) {
                 continue;
@@ -352,7 +473,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 continue;
             }
             MergedLeaf leaf = mergedLeafFromUnresolvedGroup(group);
-            if (leaf == null) {
+            if (leaf == null || hasManuallyCollapsedInput(leaf)) {
                 continue;
             }
             if (shouldBlockExpansion(leaf)) {
@@ -369,10 +490,10 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             if (wouldCauseRecursiveLeafExpansion(leaf, chosen.get())) {
                 continue;
             }
-            applyLeafSelection(leaf, chosen.get());
-            return true;
+            applyLeafSelection(leaf, chosen.get(), rememberedCache);
+            applied++;
         }
-        return false;
+        return applied;
     }
 
     private void collectUnresolvedInputsGrouped(RecipeTreeNodeViewModel node, Map<String, List<UnresolvedInputSlot>> grouped) {
@@ -400,7 +521,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             parents.add(slot.parentNode());
             total = safeAdd(total, Math.max(1, slot.input().amount()));
         }
-        return new MergedLeaf(representative.displayIngredient(), displayNameOf(representative), total, representative.amountText(),
+        return new MergedLeaf(resolveGroupIngredient(members), displayNameOf(representative), total, representative.amountText(),
                 anchorParent, List.copyOf(members), List.copyOf(parents));
     }
 
@@ -443,6 +564,22 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         return resolved;
     }
 
+    private record NodeCrafts(RecipeTreeNodeViewModel node, int crafts) {
+    }
+
+    private record CachedInputSignature(int alternativeIndex, String signature) {
+    }
+
+    private record LayerTraversalEntry(RecipeTreeNodeViewModel node, int crafts, int depth) {
+    }
+
+    private record LayerMaterialKey(int kind, String ingredientSignature, @Nullable String expansionSignature) {
+    }
+
+    private record CachedLayerMaterialKey(int alternativeIndex, @Nullable RecipeTreeNodeViewModel child,
+            LayerMaterialKey key) {
+    }
+
     private record UnresolvedInputSlot(RecipeTreeInputViewModel input, RecipeTreeNodeViewModel parentNode) {
     }
 
@@ -452,6 +589,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         int x = left + Math.max(0, (subtreeWidth - node.width()) / 2);
         PositionedNode positioned = new PositionedNode(node, x, y);
         positionedNodes.add(positioned);
+        positionedNodeRows.computeIfAbsent(y, ignored -> new ArrayList<>()).add(positioned);
 
         if (node.children().isEmpty()) {
             return positioned;
@@ -461,17 +599,61 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         int childLeft = left + Math.max(0, (subtreeWidth - childrenWidth) / 2);
         for (GraphNode child : node.children()) {
             PositionedNode childPositioned = layoutNode(child, depth + 1, childLeft);
-            edges.add(new Edge(positioned, childPositioned));
+            Edge edge = new Edge(positioned, childPositioned);
+            edges.add(edge);
+            edgeRows.computeIfAbsent(positioned.y(), ignored -> new ArrayList<>()).add(edge);
             childLeft += computeSubtreeWidth(child) + LEAF_GAP;
         }
         return positioned;
     }
 
-    private int computeSubtreeWidth(GraphNode node) {
-        if (node.children().isEmpty()) {
-            return node.width();
+    private void finalizeSpatialIndex() {
+        for (List<PositionedNode> row : positionedNodeRows.values()) {
+            row.sort((left, right) -> Integer.compare(left.x(), right.x()));
         }
-        return Math.max(node.width(), totalChildrenWidth(node.children()));
+        for (List<Edge> row : edgeRows.values()) {
+            row.sort((left, right) -> Integer.compare(edgeMinX(left), edgeMinX(right)));
+        }
+        for (LayerRow row : mergedLayerRows) {
+            int size = row.materials().size();
+            int[] leftOffsets = new int[size];
+            int[] rightOffsets = new int[size];
+            int[] centerOffsets = new int[size];
+            int currentX = 0;
+            for (int i = 0; i < size; i++) {
+                LayerMaterial material = row.materials().get(i);
+                leftOffsets[i] = currentX;
+                rightOffsets[i] = currentX + material.width();
+                centerOffsets[i] = currentX + material.width() / 2;
+                currentX += material.width() + 4;
+            }
+            int rowWidth = size == 0 ? 24 : Math.max(24, currentX - 4);
+            int anchorCenterOffset = size == 0 ? rowWidth / 2
+                    : (centerOffsets[0] + centerOffsets[size - 1]) / 2;
+            mergedRowRenderCaches.put(row,
+                    new LayerRowRenderCache(leftOffsets, rightOffsets, centerOffsets, rowWidth, anchorCenterOffset));
+        }
+    }
+
+    private static int edgeMinX(Edge edge) {
+        return Math.min(edge.parent().x(), edge.child().x());
+    }
+
+    private static int edgeMaxX(Edge edge) {
+        return Math.max(edge.parent().x() + edge.parent().graph().width(),
+                edge.child().x() + edge.child().graph().width());
+    }
+
+    private int computeSubtreeWidth(GraphNode node) {
+        Integer cached = graphSubtreeWidthCache.get(node);
+        if (cached != null) {
+            return cached;
+        }
+        int width = node.children().isEmpty()
+                ? node.width()
+                : Math.max(node.width(), totalChildrenWidth(node.children()));
+        graphSubtreeWidthCache.put(node, width);
+        return width;
     }
 
     private int totalChildrenWidth(List<GraphNode> children) {
@@ -507,16 +689,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             }
 
             RecipeTreeNodeViewModel child = representative.child();
-            if (child == null) {
-                String signature = signatureOf(representative);
-                RecipeTreeRecipeViewModel remembered = context.getRememberedSelection(signature);
-                if (remembered != null && !containsRecipeInAncestors(node, remembered)) {
-                    child = new RecipeTreeNodeViewModel(remembered, node);
-                    for (RecipeTreeInputViewModel input : group) {
-                        input.setChild(child);
-                    }
-                }
-            }
 
             if (child != null) {
                 int childCrafts = ceilDiv(totalRequiredAmount, child.recipe().primaryOutputCount());
@@ -529,86 +701,125 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         String amountLabel = "";
         String exactAmountLabel = "";
         if (computeRecipeQuantities) {
-            amountLabel = crafts > 1 ? "x" + formatCompactCount(crafts) : "";
-            exactAmountLabel = crafts > 1
-                    ? Component.translatable("gui.jeict.recipe_tree.amount_exact", crafts).getString()
-                    : "";
+            amountLabel = formatCompactCount(crafts);
+            exactAmountLabel = Component.translatable("gui.jeict.recipe_tree.amount_exact", crafts).getString();
         }
         return new GraphNode(node.recipe().primaryOutputIngredient(), node.recipe().title().getString(), amountLabel,
                 exactAmountLabel,
-                node, node.recipe().subtitleIcon(), node.recipe().subtitle(), null, children,
-                computeNodeWidth(amountLabel, node.recipe().subtitleIcon() != null, false));
+                node, node.recipe().subtitleIcon(), node.recipe().subtitle(), null, false, children,
+                computeNodeWidth(node.recipe().title().getString(), amountLabel,
+                        node.recipe().subtitleIcon() != null, false, node.parent() != null && !children.isEmpty()));
     }
 
     private List<LayerRow> buildMergedLayerRows(RecipeTreeNodeViewModel root, int crafts) {
         MergedBuildStats stats = new MergedBuildStats();
-        Map<Integer, LayerAccumulator> layers = new LinkedHashMap<>();
-        collectMergedLayers(root, crafts, 0, layers, stats);
-        List<LayerRow> rows = new ArrayList<>();
-        for (LayerAccumulator layer : layers.values()) {
-            rows.add(layer.toRow());
+        List<LayerAccumulator> layers = new ArrayList<>();
+        ArrayDeque<LayerTraversalEntry> pending = new ArrayDeque<>();
+        pending.addLast(new LayerTraversalEntry(root, crafts, 0));
+        while (!pending.isEmpty()) {
+            LayerTraversalEntry entry = pending.removeFirst();
+            RecipeTreeNodeViewModel node = entry.node();
+            int depth = entry.depth();
+            stats.collectCalls++;
+            layerAt(layers, depth).addNode(node, entry.crafts());
+            stats.recipeNodeAdds++;
+
+            RecipeTreeNodeViewModel firstChild = null;
+            int firstChildAmount = 0;
+            Map<RecipeTreeNodeViewModel, Integer> multipleChildren = null;
+            for (RecipeTreeInputViewModel input : node.recipe().inputs()) {
+                RecipeTreeNodeViewModel child = input.child();
+                int amount = Math.max(1, safeMultiply(entry.crafts(), input.amount()));
+                if (child == null) {
+                    layerAt(layers, depth + 1).addLeaf(input, amount, node);
+                    stats.leafAdds++;
+                    continue;
+                }
+                stats.aggregatedChildLinks++;
+                if (firstChild == null) {
+                    firstChild = child;
+                    firstChildAmount = amount;
+                } else if (multipleChildren == null && child == firstChild) {
+                    firstChildAmount = safeAdd(firstChildAmount, amount);
+                } else {
+                    if (multipleChildren == null) {
+                        multipleChildren = new IdentityHashMap<>();
+                        multipleChildren.put(firstChild, firstChildAmount);
+                    }
+                    multipleChildren.merge(child, amount, RecipeTreeOverviewScreen::safeAdditiveMergeTotals);
+                }
+            }
+            if (multipleChildren != null) {
+                for (Map.Entry<RecipeTreeNodeViewModel, Integer> childEntry : multipleChildren.entrySet()) {
+                    RecipeTreeNodeViewModel child = childEntry.getKey();
+                    pending.addLast(new LayerTraversalEntry(child,
+                            ceilDiv(childEntry.getValue(), child.recipe().primaryOutputCount()), depth + 1));
+                }
+            } else if (firstChild != null) {
+                pending.addLast(new LayerTraversalEntry(firstChild,
+                        ceilDiv(firstChildAmount, firstChild.recipe().primaryOutputCount()), depth + 1));
+            }
+        }
+
+        List<LayerRow> rows = new ArrayList<>(layers.size());
+        int materialCount = 0;
+        for (LayerAccumulator layer : layers) {
+            LayerRow row = layer.toRow();
+            rows.add(row);
+            materialCount += row.materials().size();
         }
         List<LayerRow> built = List.copyOf(rows);
         stats.layerRows = built.size();
-        int materialCount = 0;
-        for (LayerRow row : built) {
-            materialCount += row.materials().size();
-        }
         stats.layerMaterials = materialCount;
         lastMergedBuildStats = stats;
         return built;
     }
 
-    private void collectMergedLayers(RecipeTreeNodeViewModel node, int crafts, int depth,
-            Map<Integer, LayerAccumulator> layers, MergedBuildStats stats) {
-        stats.collectCalls++;
-        LayerAccumulator accumulator = layers.computeIfAbsent(depth, ignored -> new LayerAccumulator(depth));
-        accumulator.addNode(node, crafts);
-        stats.recipeNodeAdds++;
-        Map<RecipeTreeNodeViewModel, Integer> aggregatedChildConsumption = new LinkedHashMap<>();
-        for (RecipeTreeInputViewModel input : node.recipe().inputs()) {
-            RecipeTreeNodeViewModel child = input.child();
-            int amount = Math.max(1, safeMultiply(crafts, input.amount()));
-            if (child != null) {
-                aggregatedChildConsumption.merge(child, amount, RecipeTreeOverviewScreen::safeAdditiveMergeTotals);
-                stats.aggregatedChildLinks++;
-            } else {
-                layers.computeIfAbsent(depth + 1, ignored -> new LayerAccumulator(depth + 1)).addLeaf(input, amount, node);
-                stats.leafAdds++;
-            }
+    private LayerAccumulator layerAt(List<LayerAccumulator> layers, int depth) {
+        while (layers.size() <= depth) {
+            layers.add(null);
         }
-        for (Map.Entry<RecipeTreeNodeViewModel, Integer> entry : aggregatedChildConsumption.entrySet()) {
-            RecipeTreeNodeViewModel child = entry.getKey();
-            int childCrafts = ceilDiv(entry.getValue(), child.recipe().primaryOutputCount());
-            collectMergedLayers(child, childCrafts, depth + 1, layers, stats);
+        LayerAccumulator layer = layers.get(depth);
+        if (layer == null) {
+            layer = new LayerAccumulator(depth);
+            layers.set(depth, layer);
         }
+        return layer;
     }
 
-    /** 合并层递归：同源子配方多次引用时汇总用量后再向下 DFS，避免对同一 child 重复整棵子树。 */
     private static int safeAdditiveMergeTotals(int left, int right) {
         return safeAdd(left, right);
     }
 
-    private String leafAggregateStorageKey(RecipeTreeInputViewModel input) {
+    private LayerMaterialKey leafAggregateStorageKey(RecipeTreeInputViewModel input) {
+        int alternativeIndex = input.selectedAlternativeIndex();
         RecipeTreeNodeViewModel child = input.child();
-        String base = leafSignatureOf(input);
-        if (child == null) {
-            return base + "|unexpanded";
+        CachedLayerMaterialKey cached = leafLayerKeyCache.get(input);
+        if (cached != null && cached.alternativeIndex() == alternativeIndex && cached.child() == child) {
+            return cached.key();
         }
-        ResourceLocation id = child.recipe().recipeId();
-        if (id != null) {
-            return base + "|expanded|" + id;
+        String expansionSignature = null;
+        if (child != null) {
+            ResourceLocation id = child.recipe().recipeId();
+            expansionSignature = id != null
+                    ? id.toString()
+                    : child.recipe().title().getString() + "|" + signatureOf(child.recipe().primaryOutputIngredient());
         }
-        return base + "|expanded|" + child.recipe().title().getString() + "|"
-                + signatureOf(child.recipe().primaryOutputIngredient());
+        LayerMaterialKey key = new LayerMaterialKey(1, leafSignatureOf(input), expansionSignature);
+        leafLayerKeyCache.put(input, new CachedLayerMaterialKey(alternativeIndex, child, key));
+        return key;
     }
 
-    private String recipeOutputStorageKey(RecipeTreeNodeViewModel node) {
-        ITypedIngredient<?> ingredient = node.recipe().primaryOutputIngredient();
-        if (ingredient != null) {
-            return "R:" + signatureOf(ingredient);
+    private LayerMaterialKey recipeOutputStorageKey(RecipeTreeNodeViewModel node) {
+        LayerMaterialKey cached = recipeLayerKeyCache.get(node);
+        if (cached != null) {
+            return cached;
         }
-        return "R:" + signatureOfNode(node);
+        ITypedIngredient<?> ingredient = node.recipe().primaryOutputIngredient();
+        LayerMaterialKey key = new LayerMaterialKey(0,
+                ingredient != null ? signatureOf(ingredient) : signatureOfNode(node), null);
+        recipeLayerKeyCache.put(node, key);
+        return key;
     }
 
     private List<InputCluster> clusterInputsBySignature(List<RecipeTreeInputViewModel> orderedInputs) {
@@ -639,11 +850,179 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     private int computeMergedLayerContentWidth() {
-        int width = 0;
-        for (LayerRow row : mergedLayerRows) {
-            width = Math.max(width, row.width());
+        return Math.max(1, cachedMergedContentWidth);
+    }
+
+    private List<GenericTopMaterialRenderData> collectGenericTopMaterialRenderData() {
+        unresolvedInputsBySignature.clear();
+        Map<String, ItemTopMaterialAccumulator> itemMaterials = new LinkedHashMap<>();
+        Map<String, GenericTopMaterialAccumulator> genericMaterials = new LinkedHashMap<>();
+        collectGenericTopMaterials(context.root(), batchCount, itemMaterials, genericMaterials);
+        List<RequestedIngredient> rebuiltTopMaterials = new ArrayList<>(itemMaterials.size());
+        for (Map.Entry<String, ItemTopMaterialAccumulator> entry : itemMaterials.entrySet()) {
+            ItemTopMaterialAccumulator accumulator = entry.getValue();
+            rebuiltTopMaterials.add(accumulator.toRequestedIngredient());
+            unresolvedInputsBySignature.put(entry.getKey(), accumulator.slots());
         }
-        return Math.max(1, width);
+        topMaterials = List.copyOf(rebuiltTopMaterials);
+        List<GenericTopMaterialRenderData> result = new ArrayList<>(genericMaterials.size());
+        for (GenericTopMaterialAccumulator accumulator : genericMaterials.values()) {
+            MergedLeaf leaf = accumulator.toLeaf();
+            unresolvedInputsBySignature.put(leafSignatureOf(leaf.representative()), accumulator.slots());
+            String label = computeRecipeQuantities
+                    ? formatLayerMaterialAmountLabel(leaf.ingredient(), leaf.members(), leaf.totalAmount())
+                    : "";
+            int width = 24 + (label.isEmpty() ? 0 : this.font.width(label) + 6);
+            if (leaf.representative().hasAlternativeChoices()) {
+                width += 14;
+            }
+            result.add(new GenericTopMaterialRenderData(leaf, label, width));
+        }
+        return List.copyOf(result);
+    }
+
+    private void collectGenericTopMaterials(RecipeTreeNodeViewModel root, int rootCrafts,
+            Map<String, ItemTopMaterialAccumulator> itemMaterials,
+            Map<String, GenericTopMaterialAccumulator> genericMaterials) {
+        ArrayDeque<NodeCrafts> pending = new ArrayDeque<>();
+        pending.addLast(new NodeCrafts(root, rootCrafts));
+        while (!pending.isEmpty()) {
+            NodeCrafts current = pending.removeLast();
+            RecipeTreeNodeViewModel node = current.node();
+            int crafts = current.crafts();
+            RecipeTreeNodeViewModel firstChild = null;
+            int firstChildAmount = 0;
+            Map<RecipeTreeNodeViewModel, Integer> multipleChildren = null;
+            for (RecipeTreeInputViewModel input : node.recipe().inputs()) {
+                RecipeTreeNodeViewModel child = input.child();
+                int amount = safeMultiply(crafts, input.amount());
+                if (child != null) {
+                    if (firstChild == null) {
+                        firstChild = child;
+                        firstChildAmount = amount;
+                    } else if (multipleChildren == null && child == firstChild) {
+                        firstChildAmount = safeAdd(firstChildAmount, amount);
+                    } else {
+                        if (multipleChildren == null) {
+                            multipleChildren = new IdentityHashMap<>();
+                            multipleChildren.put(firstChild, firstChildAmount);
+                        }
+                        multipleChildren.merge(child, amount, RecipeTreeOverviewScreen::safeAdd);
+                    }
+                    continue;
+                }
+                RequestedIngredient requested = input.requestedIngredientView();
+                String signature = leafSignatureOf(input);
+                if (requested != null && !requested.alternatives().isEmpty()) {
+                    itemMaterials.computeIfAbsent(signature, ignored -> new ItemTopMaterialAccumulator(input))
+                            .add(input, node, amount);
+                    continue;
+                }
+                genericMaterials.computeIfAbsent(signature, ignored -> new GenericTopMaterialAccumulator(input, node))
+                        .add(input, node, amount);
+            }
+            if (multipleChildren != null) {
+                for (Map.Entry<RecipeTreeNodeViewModel, Integer> entry : multipleChildren.entrySet()) {
+                    RecipeTreeNodeViewModel child = entry.getKey();
+                    pending.addLast(new NodeCrafts(child,
+                            ceilDiv(entry.getValue(), child.recipe().primaryOutputCount())));
+                }
+            } else if (firstChild != null) {
+                pending.addLast(new NodeCrafts(firstChild,
+                        ceilDiv(firstChildAmount, firstChild.recipe().primaryOutputCount())));
+            }
+        }
+    }
+
+    private void refreshTopMaterialRenderCacheIfNeeded() {
+        Inventory inventory = currentTopMaterialInventory();
+        int inventoryVersion = computeRecipeQuantities && inventory != null ? inventory.getTimesChanged() : -1;
+        if (!topMaterialRenderCacheDirty
+                && inventory == topMaterialInventory
+                && inventoryVersion == topMaterialInventoryVersion
+                && topMaterialRenderData.size() == topMaterials.size()
+                && surplusMaterialRenderData.size() == surplusMaterials.size()) {
+            return;
+        }
+        boolean rebuildPatternHints = topMaterialPatternHintsDirty
+                || topMaterialRenderData.size() != topMaterials.size();
+        List<TopMaterialRenderData> previous = topMaterialRenderData;
+        List<TopMaterialRenderData> rebuilt = new ArrayList<>(topMaterials.size());
+        for (int i = 0; i < topMaterials.size(); i++) {
+            RequestedIngredient material = topMaterials.get(i);
+            int displayCount = computeRecipeQuantities ? Math.max(1, material.count()) : 1;
+            String label = computeRecipeQuantities ? "x" + formatCompactCount(displayCount) : "";
+            int width = 24 + (label.isEmpty() ? 0 : this.font.width(label) + 6);
+            if (material.alternatives().size() > 1) {
+                width += 14;
+            }
+            ItemStack stack = ItemStack.EMPTY;
+            if (!material.alternatives().isEmpty()) {
+                stack = material.alternatives().getFirst().copyWithCount(displayCount);
+            }
+            boolean showsPatternHint = !rebuildPatternHints
+                    && previous.get(i).material() == material
+                    ? previous.get(i).showsPatternHint()
+                    : shouldShowTopMaterialPatternHint(material);
+            rebuilt.add(new TopMaterialRenderData(material, displayCount,
+                    inventoryAdjustedLabelColor(material, displayCount), label, width, stack, showsPatternHint));
+        }
+        topMaterialRenderData = List.copyOf(rebuilt);
+        List<TopMaterialRenderData> rebuiltSurplus = new ArrayList<>(surplusMaterials.size());
+        for (RequestedIngredient material : surplusMaterials) {
+            int displayCount = Math.max(1, material.count());
+            String label = "x" + formatCompactCount(displayCount);
+            int width = 24 + this.font.width(label) + 6;
+            ItemStack stack = material.alternatives().isEmpty()
+                    ? ItemStack.EMPTY
+                    : material.alternatives().getFirst().copyWithCount(displayCount);
+            rebuiltSurplus.add(new TopMaterialRenderData(material, displayCount, RecipeTreeTheme.current().enough(),
+                    label, width, stack, false));
+        }
+        surplusMaterialRenderData = List.copyOf(rebuiltSurplus);
+        cachedMissingMaterialCount = 0;
+        if (computeRecipeQuantities) {
+            int enoughColor = RecipeTreeTheme.current().enough();
+            for (TopMaterialRenderData data : rebuilt) {
+                if (data.labelColor() != enoughColor) {
+                    cachedMissingMaterialCount++;
+                }
+            }
+        }
+        topMaterialInventory = inventory;
+        topMaterialInventoryVersion = inventoryVersion;
+        topMaterialRenderCacheDirty = false;
+        topMaterialPatternHintsDirty = false;
+    }
+
+    private static @Nullable Inventory currentTopMaterialInventory() {
+        Minecraft minecraft = Minecraft.getInstance();
+        return minecraft.player == null ? null : minecraft.player.getInventory();
+    }
+
+    private void refreshMergedContentWidth() {
+        int maxLeftExtent = 0;
+        int maxRightExtent = 1;
+        for (LayerRow row : mergedLayerRows) {
+            int currentX = 0;
+            int firstCenter = NODE_MAIN_SIZE / 2;
+            int lastCenter = firstCenter;
+            for (int i = 0; i < row.materials().size(); i++) {
+                LayerMaterial material = row.materials().get(i);
+                int center = currentX + material.width() / 2;
+                if (i == 0) {
+                    firstCenter = center;
+                }
+                lastCenter = center;
+                currentX += material.width() + 4;
+            }
+            int rowWidth = row.materials().isEmpty() ? 24 : Math.max(24, currentX - 4);
+            int anchorCenter = (firstCenter + lastCenter) / 2;
+            maxLeftExtent = Math.max(maxLeftExtent, anchorCenter);
+            maxRightExtent = Math.max(maxRightExtent, rowWidth - anchorCenter);
+        }
+        cachedMergedAnchorOffset = maxLeftExtent;
+        cachedMergedContentWidth = Math.max(1, maxLeftExtent + maxRightExtent);
     }
 
     private int computeMergedLayerContentHeight() {
@@ -651,6 +1030,169 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             return NODE_HEIGHT;
         }
         return mergedLayerRows.size() * LEVEL_GAP;
+    }
+
+    private void fitInitialTreeView(PositionedNode root) {
+        double minX = root.x();
+        double minY = root.y() - NODE_HEIGHT - 28.0D;
+        double maxX = root.x() + root.graph().width();
+        double maxY = root.y() + NODE_HEIGHT;
+        for (PositionedNode node : positionedNodes) {
+            minX = Math.min(minX, node.x());
+            minY = Math.min(minY, node.y());
+            maxX = Math.max(maxX, node.x() + node.graph().width());
+            maxY = Math.max(maxY, node.y() + NODE_HEIGHT);
+        }
+        fitInitialView(minX, minY, maxX, maxY);
+    }
+
+    private void fitInitialView(double minX, double minY, double maxX, double maxY) {
+        double contentWidth = Math.max(1.0D, maxX - minX);
+        double contentHeight = Math.max(1.0D, maxY - minY);
+        double availableWidth = Math.max(1.0D, canvasRight() - canvasLeft() - 32.0D);
+        double availableHeight = Math.max(1.0D, this.height - HEADER_HEIGHT - currentFooterHeight() - 36.0D);
+        double fitted = Math.min(availableWidth / (contentWidth + 48.0D),
+                availableHeight / (contentHeight + 36.0D));
+        zoom = Math.max(INITIAL_MIN_ZOOM, Math.min(INITIAL_MAX_ZOOM, fitted));
+        double screenCenterX = (canvasLeft() + canvasRight()) * 0.5D;
+        double screenCenterY = (HEADER_HEIGHT + this.height - currentFooterHeight()) * 0.5D;
+        panX = screenCenterX - (minX + maxX) * 0.5D * zoom;
+        panY = screenCenterY - (minY + maxY) * 0.5D * zoom;
+    }
+
+    private void fitCurrentView() {
+        if (autoMergeSameMaterials) {
+            if (mergedLayerRows.isEmpty()) {
+                return;
+            }
+            int contentWidth = computeMergedLayerContentWidth();
+            int contentHeight = computeMergedLayerContentHeight();
+            double left = 36.0D;
+            double top = 42.0D + TOP_MATERIALS_OFFSET - NODE_HEIGHT - 28.0D;
+            fitInitialView(left, top, left + contentWidth, 42.0D + TOP_MATERIALS_OFFSET + contentHeight);
+        } else if (!positionedNodes.isEmpty()) {
+            fitInitialTreeView(positionedNodes.getFirst());
+        }
+        updateSelectionButtons();
+    }
+
+    private void zoomAtCenter(double delta) {
+        double centerX = (canvasLeft() + canvasRight()) * 0.5D;
+        double centerY = (HEADER_HEIGHT + this.height - currentFooterHeight()) * 0.5D;
+        zoomAt(centerX, centerY, delta);
+    }
+
+    private void zoomAt(double screenX, double screenY, double delta) {
+        double oldZoom = zoom;
+        zoom = Math.max(0.2D, Math.min(4.0D, zoom + delta));
+        double logicalX = (screenX - panX) / oldZoom;
+        double logicalY = (screenY - panY) / oldZoom;
+        panX = screenX - logicalX * zoom;
+        panY = screenY - logicalY * zoom;
+        updateSelectionButtons();
+    }
+
+
+
+    private @Nullable RootBatchAnchor updateBatchBadgeBounds() {
+        RootBatchAnchor anchor = findRootBatchAnchor();
+        if (anchor == null) {
+            batchBadgeBounds = null;
+            return null;
+        }
+        String label = batchCountLabel();
+        int logicalX = anchor.right() + BATCH_TEXT_GAP;
+        int logicalY = anchor.y() + Math.max(0, (NODE_HEIGHT - this.font.lineHeight) / 2);
+        int logicalWidth = this.font.width(label);
+        int logicalHeight = this.font.lineHeight;
+        if (!isLogicalRectVisible(logicalX, logicalY,
+                logicalX + logicalWidth, logicalY + logicalHeight)) {
+            batchBadgeBounds = null;
+            return null;
+        }
+        int x = (int) Math.floor(logicalX * zoom + panX);
+        int y = (int) Math.floor(logicalY * zoom + panY);
+        int right = (int) Math.ceil((logicalX + logicalWidth) * zoom + panX);
+        int bottom = (int) Math.ceil((logicalY + logicalHeight) * zoom + panY);
+        int footerTop = this.height - currentFooterHeight();
+        boolean visible = x < canvasRight() - 2
+                && right > canvasLeft() + 2
+                && y < footerTop - 2
+                && bottom > HEADER_HEIGHT + 2;
+        batchBadgeBounds = visible
+                ? new BatchBadgeBounds(x, y, Math.max(1, right - x), Math.max(1, bottom - y))
+                : null;
+        return visible ? anchor : null;
+    }
+
+    private @Nullable RootBatchAnchor findRootBatchAnchor() {
+        if (autoMergeSameMaterials) {
+            if (mergedLayerRows.isEmpty()) {
+                return null;
+            }
+            LayerRow rootRow = mergedLayerRows.getFirst();
+            LayerRowRenderCache cache = mergedRowRenderCaches.get(rootRow);
+            if (cache == null || cache.rightOffsets().length == 0) {
+                return null;
+            }
+            int rowX = mergedRowX(36, cache);
+            int left = rowX + cache.leftOffsets()[0];
+            int right = rowX + cache.rightOffsets()[cache.rightOffsets().length - 1];
+            return new RootBatchAnchor(left, right, 42 + TOP_MATERIALS_OFFSET);
+        }
+        if (rootNode == null) {
+            return null;
+        }
+        for (PositionedNode node : positionedNodes) {
+            if (node.graph() == rootNode || node.graph().recipeNode() == context.root()) {
+                return new RootBatchAnchor(node.x(), node.x() + node.graph().width(), node.y());
+            }
+        }
+        if (!positionedNodes.isEmpty()) {
+            PositionedNode root = positionedNodes.getFirst();
+            return new RootBatchAnchor(root.x(), root.x() + root.graph().width(), root.y());
+        }
+        return null;
+    }
+
+    private void adjustBatchCount(int delta) {
+        if (delta != 0) {
+            setBatchCount(safeAdd(batchCount, delta));
+        }
+    }
+
+    private void setBatchCount(int count) {
+        int normalized = Math.max(1, count);
+        if (normalized == batchCount) {
+            return;
+        }
+        batchCount = normalized;
+        refreshRenderedProjection();
+    }
+
+    private String batchCountLabel() {
+        return "x" + formatCompactCount(batchCount);
+    }
+
+
+    private void ensureLogicalRectVisible(int x, int y, int width, int height) {
+        double screenLeft = x * zoom + panX;
+        double screenTop = y * zoom + panY;
+        double screenRight = (x + width) * zoom + panX;
+        double screenBottom = (y + height) * zoom + panY;
+        int margin = 18;
+        if (screenRight > canvasRight() - margin) {
+            panX -= screenRight - (canvasRight() - margin);
+        }
+        if (screenLeft < canvasLeft() + margin) {
+            panX += canvasLeft() + margin - screenLeft;
+        }
+        if (screenBottom > this.height - currentFooterHeight() - margin) {
+            panY -= screenBottom - (this.height - currentFooterHeight() - margin);
+        }
+        if (screenTop < HEADER_HEIGHT + margin) {
+            panY += HEADER_HEIGHT + margin - screenTop;
+        }
     }
 
     private @Nullable LayerMaterialBounds findLayerAt(double logicalMouseX, double logicalMouseY) {
@@ -720,7 +1262,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 }
                 total += materials.get(i).width();
             }
-            return Math.max(24, total + 8);
+            return Math.max(24, total);
         }
     }
 
@@ -755,37 +1297,37 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
 
     private final class LayerAccumulator {
         private final int depth;
-        private final Map<String, LayerMaterialAggregate> materials = new LinkedHashMap<>();
+        private final Map<LayerMaterialKey, LayerMaterialAggregate> materials = new LinkedHashMap<>();
 
         private LayerAccumulator(int depth) {
             this.depth = depth;
         }
 
         private void addNode(RecipeTreeNodeViewModel node, int crafts) {
+            LayerMaterialKey storageKey = recipeOutputStorageKey(node);
+            LayerMaterialAggregate aggregate = materials.get(storageKey);
             ITypedIngredient<?> ingredient = node.recipe().primaryOutputIngredient();
-            String label = displayNameOfOutput(node);
+            String label = null;
+            if (aggregate == null) {
+                label = displayNameOfOutput(node);
+                aggregate = new LayerMaterialAggregate(ingredient, label, false);
+                materials.put(storageKey, aggregate);
+            }
             int amount = safeMultiply(crafts, node.recipe().primaryOutputCount());
-            String storageKey = recipeOutputStorageKey(node);
-            LayerMaterialAggregate aggregate = materials.computeIfAbsent(storageKey,
-                    ignored -> new LayerMaterialAggregate(ingredient, label, false));
             aggregate.addRecipeNode(node, amount, ingredient, label);
         }
 
         private void addLeaf(RecipeTreeInputViewModel input, int amount, RecipeTreeNodeViewModel parentNode) {
-            ITypedIngredient<?> resolvedIngredient = input.displayIngredient();
-            if (resolvedIngredient == null) {
-                ItemStack stack = input.displayStack();
-                if (!stack.isEmpty()) {
-                    resolvedIngredient = getIngredientManager() == null
-                            ? null
-                            : getIngredientManager().createTypedIngredient(stack.copyWithCount(1), true).orElse(null);
-                }
+            LayerMaterialKey storageKey = leafAggregateStorageKey(input);
+            LayerMaterialAggregate aggregate = materials.get(storageKey);
+            ITypedIngredient<?> resolvedIngredient = null;
+            String label = null;
+            if (aggregate == null) {
+                resolvedIngredient = resolveDisplayIngredient(input);
+                label = displayNameOf(input);
+                aggregate = new LayerMaterialAggregate(resolvedIngredient, label, input.hasAlternativeChoices());
+                materials.put(storageKey, aggregate);
             }
-            String label = displayNameOf(input);
-            String storageKey = "L:" + leafAggregateStorageKey(input);
-            final ITypedIngredient<?> ingredientForAggregate = resolvedIngredient;
-            LayerMaterialAggregate aggregate = materials.computeIfAbsent(storageKey,
-                    ignored -> new LayerMaterialAggregate(ingredientForAggregate, label, input.hasAlternativeChoices()));
             aggregate.addLeaf(input, amount, parentNode, resolvedIngredient, label, input.hasAlternativeChoices());
         }
 
@@ -856,7 +1398,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                     ? formatLayerMaterialAmountLabel(ingredient, List.copyOf(leafInputs), displayAmount)
                     : "";
             boolean showAlternativesButton = hasAlternatives && leafInputs.stream().anyMatch(input -> input.child() == null);
-            int slotWidth = computeNodeWidth(amountLabel, machineIcon != null, showAlternativesButton);
+            int slotWidth = computeNodeWidth(label, amountLabel, machineIcon != null, showAlternativesButton, false);
             boolean hint = RecipeTreeOverviewScreen.this.computeLayerMaterialShowsPatternHint(ingredient, label, amount,
                     List.copyOf(recipeTargets), List.copyOf(leafInputs), List.copyOf(leafParents));
             MergedLeaf projection = null;
@@ -916,29 +1458,67 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         return shouldShowMeExistingPatternHints() && hasExistingPatternForRequestedIngredient(mat);
     }
 
+    private boolean cachedTopMaterialShowsPatternHint(RequestedIngredient material) {
+        for (TopMaterialRenderData data : topMaterialRenderData) {
+            if (data.material() == material) {
+                return data.showsPatternHint();
+            }
+        }
+        return shouldShowTopMaterialPatternHint(material);
+    }
+
+    private @Nullable ITypedIngredient<?> resolveDisplayIngredient(RecipeTreeInputViewModel input) {
+        ITypedIngredient<?> ingredient = input.displayIngredient();
+        if (ingredient != null) {
+            return ingredient;
+        }
+        ItemStack stack = input.displayStack();
+        IIngredientManager ingredientManager = getIngredientManager();
+        if (stack.isEmpty() || ingredientManager == null) {
+            return null;
+        }
+        return ingredientManager.createTypedIngredient(stack.copyWithCount(1), true).orElse(null);
+    }
+
+    private @Nullable ITypedIngredient<?> resolveGroupIngredient(List<RecipeTreeInputViewModel> inputs) {
+        for (RecipeTreeInputViewModel input : inputs) {
+            ITypedIngredient<?> ingredient = resolveDisplayIngredient(input);
+            if (ingredient != null) {
+                return ingredient;
+            }
+        }
+        return null;
+    }
+
     private void addMergedLeafChild(RecipeTreeNodeViewModel node, List<GraphNode> children,
             List<RecipeTreeInputViewModel> group, int totalRequiredAmount) {
         if (group.isEmpty()) {
             return;
         }
         RecipeTreeInputViewModel representative = group.get(0);
-        MergedLeaf leaf = new MergedLeaf(representative.displayIngredient(), displayNameOf(representative), totalRequiredAmount,
+        MergedLeaf leaf = new MergedLeaf(resolveGroupIngredient(group), displayNameOf(representative), totalRequiredAmount,
                 representative.amountText(), node, List.copyOf(group), List.of());
         String amountLabel = computeRecipeQuantities ? formatMergedLeafAmount(leaf) : "";
         String exact = computeRecipeQuantities ? exactAmountOf(leaf) : "";
+        boolean showsPatternHint = shouldShowMeExistingPatternHints() && shouldBlockExpansion(leaf);
         children.add(new GraphNode(leaf.ingredient(), leaf.title(), amountLabel, exact, null, null, null, leaf,
-                List.of(), computeNodeWidth(amountLabel, false, leaf.representative().hasAlternativeChoices())));
+                showsPatternHint, List.of(), computeNodeWidth(leaf.title(), amountLabel, false,
+                        leaf.representative().hasAlternativeChoices(), false)));
     }
 
-    private static int computeNodeWidth(String amountLabel, boolean hasMachineIcon, boolean hasAlternativeButton) {
-        int width = 24 + (amountLabel == null || amountLabel.isBlank() ? 0 : Minecraft.getInstance().font.width(amountLabel) + 6);
+    private static int computeNodeWidth(String title, String amountLabel,
+            boolean hasMachineIcon, boolean hasAlternativeButton, boolean hasCollapseButton) {
+        int width = NODE_MAIN_SIZE;
         if (hasMachineIcon) {
-            width += MACHINE_SLOT_SIZE + 4;
+            width += NODE_PART_GAP + MACHINE_SLOT_SIZE + NODE_PART_PADDING;
         }
         if (hasAlternativeButton) {
-            width += 14;
+            width += NODE_PART_GAP + 10 + NODE_PART_PADDING;
         }
-        return Math.max(24, width);
+        if (hasCollapseButton) {
+            width += NODE_PART_GAP + 10 + NODE_PART_PADDING;
+        }
+        return width;
     }
 
     private static String displayNameOf(RecipeTreeInputViewModel input) {
@@ -949,15 +1529,14 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     private static String formatMergedLeafAmount(MergedLeaf leaf) {
-        String sourceText = leaf.sourceAmountText();
-        if (sourceText != null && !sourceText.isBlank() && !sourceText.startsWith("x")) {
-            return sourceText;
-        }
-        return "x" + formatCompactCount(Math.max(1, leaf.totalAmount()));
+        return formatLayerMaterialAmountLabel(leaf.ingredient(), leaf.members(), leaf.totalAmount());
     }
 
     private static String exactAmountOf(MergedLeaf leaf) {
         String sourceText = leaf.sourceAmountText();
+        if (isMilliBucketAmount(leaf.ingredient(), sourceText)) {
+            return formatMilliBuckets(Math.max(1, leaf.totalAmount()));
+        }
         if (sourceText != null && !sourceText.isBlank() && !sourceText.startsWith("x")) {
             return sourceText;
         }
@@ -967,45 +1546,40 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private static String formatLayerMaterialAmountLabel(@Nullable ITypedIngredient<?> ingredient,
             List<RecipeTreeInputViewModel> leafInputs, int totalAmount) {
         int safe = Math.max(1, totalAmount);
-        if (!leafInputs.isEmpty()) {
-            String sampleText = leafInputs.getFirst().amountText();
-            if (sampleText != null && sampleText.contains("mB")) {
-                return safe + " mB";
-            }
-            if (sampleText != null && !sampleText.isBlank() && !sampleText.startsWith("x")) {
-                return sampleText;
-            }
+        String sampleText = leafInputs.isEmpty() ? "" : leafInputs.getFirst().amountText();
+        if (isMilliBucketAmount(ingredient, sampleText)) {
+            return formatMilliBuckets(safe);
         }
-        if (ingredient != null) {
-            if (ingredient.getIngredient(NeoForgeTypes.FLUID_STACK).filter(fs -> !fs.isEmpty()).isPresent()) {
-                return safe + " mB";
-            }
-            Object raw = ingredient.getIngredient();
-            if (GenericIngredientUtil.tryGetMekanismChemicalAmount(raw) > 0L) {
-                return safe + " mB";
-            }
+        if (sampleText != null && !sampleText.isBlank() && !sampleText.startsWith("x")) {
+            return sampleText;
         }
-        return "x" + formatCompactCount(safe);
+        return formatCompactCount(safe);
+    }
+
+    private static boolean isMilliBucketAmount(@Nullable ITypedIngredient<?> ingredient, @Nullable String amountText) {
+        if (amountText != null && amountText.contains("mB")) {
+            return true;
+        }
+        if (ingredient == null) {
+            return false;
+        }
+        if (ingredient.getIngredient(NeoForgeTypes.FLUID_STACK).filter(stack -> !stack.isEmpty()).isPresent()) {
+            return true;
+        }
+        return GenericIngredientUtil.tryGetMekanismChemicalAmount(ingredient.getIngredient()) > 0L;
+    }
+
+    private static String formatMilliBuckets(int amount) {
+        int safe = Math.max(1, amount);
+        if (safe < 1000) {
+            return safe + " mB";
+        }
+        String buckets = java.math.BigDecimal.valueOf(safe, 3).stripTrailingZeros().toPlainString();
+        return buckets + " B";
     }
 
     private String leafSignatureOf(RecipeTreeInputViewModel input) {
-        var requested = input.requestedIngredientView();
-        if (requested != null && !requested.alternatives().isEmpty()) {
-            String signature = input.requestedIngredientSignature();
-            if (signature != null && !signature.isBlank()) {
-                return signature;
-            }
-            return signatureOf(requested);
-        }
-        ItemStack stack = input.displayStack();
-        if (!stack.isEmpty()) {
-            return signatureOfItemType(stack);
-        }
-        ITypedIngredient<?> ingredient = input.displayIngredient();
-        if (ingredient != null) {
-            return signatureOfMaterialIngredient(ingredient);
-        }
-        return "name#" + displayNameOf(input);
+        return signatureOf(input);
     }
 
     @Override
@@ -1023,31 +1597,47 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         lastRenderedLayerMaterialCount = 0;
         lastRenderedTopMaterialCount = 0;
         RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
-        graphics.fill(0, 0, this.width, this.height, theme.background());
-        if (theme.backgroundOverlay() != 0) {
-            graphics.fill(0, 0, this.width, this.height, theme.backgroundOverlay());
-        }
+        graphics.drawManaged(() -> renderWorkspaceBackdrop(graphics, theme));
 
+        int footerHeight = currentFooterHeight();
+        boolean clippedWorkspace = this.width > 12 && this.height > HEADER_HEIGHT + footerHeight + 2;
+        updateVisibleLogicalBounds(clippedWorkspace);
+        if (clippedWorkspace) {
+            graphics.enableScissor(canvasLeft() + 2, HEADER_HEIGHT + 2, canvasRight() - 2, this.height - footerHeight - 2);
+        }
         graphics.pose().pushPose();
         graphics.pose().translate(panX, panY, 0.0F);
         graphics.pose().scale((float) zoom, (float) zoom, 1.0f);
         if (autoMergeSameMaterials) {
-            renderMergedLayerEdges(graphics);
+            graphics.drawManaged(() -> renderMergedLayerEdges(graphics));
             renderMergedLayers(graphics);
             graphics.pose().translate(0.0F, 0.0F, 1.0F);
             renderTopMaterialsMerged(graphics);
         } else {
-            renderEdges(graphics);
+            graphics.drawManaged(() -> renderEdges(graphics));
             graphics.pose().translate(0.0F, 0.0F, 1.0F);
             renderTopMaterials(graphics);
             renderNodes(graphics);
         }
+        renderBatchText(graphics, theme);
         graphics.pose().popPose();
+        if (clippedWorkspace) {
+            graphics.disableScissor();
+            renderWorkspaceFrame(graphics, theme);
+        }
 
+        renderOverlayPanelBackdrops(graphics, theme);
         super.render(graphics, mouseX, mouseY, partialTick);
-        graphics.drawString(this.font, this.title, 10, 12, theme.titleText(), false);
-        graphics.drawString(this.font, Component.translatable("gui.jeict.recipe_tree.overview_hint"), 10, 26, theme.hintText(), false);
-        graphics.drawString(this.font, cachedRequiredPatternsTitleLine, 10, 40, theme.metricText(), false);
+        renderAe2WidgetChrome(graphics, mouseX, mouseY);
+        renderDockPanels(graphics, theme, mouseX, mouseY);
+        int headerTextRight = Math.max(72, toolbarLeft - 8);
+        graphics.enableScissor(64, 5, headerTextRight, HEADER_HEIGHT - 2);
+        graphics.drawString(this.font, context.root().recipe().title(), 66, 8, theme.titleText(), false);
+        graphics.drawString(this.font, cachedRequiredPatternsTitleLine, 66, 21, theme.metricText(), false);
+        graphics.disableScissor();
+        String zoomLabel = Math.round(zoom * 100.0D) + "%";
+        graphics.drawCenteredString(this.font, zoomLabel, this.width - 106, 14, theme.metricText());
+        renderFooterStatus(graphics, theme);
 
         graphics.pose().pushPose();
         graphics.pose().translate(0.0F, 0.0F, 320.0F);
@@ -1062,75 +1652,423 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         double logicalMouseX = (mouseX - panX) / zoom;
         double logicalMouseY = (mouseY - panY) / zoom;
         renderTooltip(graphics, logicalMouseX, logicalMouseY, mouseX, mouseY);
-        RecipeTreePerfDebug.logRenderSummary(startedAt,
-                "merge={} qty={} totalNodes={} visibleNodes={} totalEdges={} visibleEdges={} rows={} visibleRows={} visibleLayerMaterials={} topMaterialsVisible={} zoom={}",
-                autoMergeSameMaterials, computeRecipeQuantities,
-                positionedNodes.size(), lastRenderedNodeCount,
-                edges.size(), lastRenderedEdgeCount,
-                mergedLayerRows.size(), lastRenderedLayerCount, lastRenderedLayerMaterialCount,
-                lastRenderedTopMaterialCount,
-                String.format(java.util.Locale.ROOT, "%.2f", zoom));
+        if (RecipeTreePerfDebug.isEnabled()) {
+            RecipeTreePerfDebug.logRenderSummary(startedAt,
+                    "merge={} qty={} totalNodes={} visibleNodes={} totalEdges={} visibleEdges={} rows={} visibleRows={} visibleLayerMaterials={} topMaterialsVisible={} zoom={}",
+                    autoMergeSameMaterials, computeRecipeQuantities,
+                    positionedNodes.size(), lastRenderedNodeCount,
+                    edges.size(), lastRenderedEdgeCount,
+                    mergedLayerRows.size(), lastRenderedLayerCount, lastRenderedLayerMaterialCount,
+                    lastRenderedTopMaterialCount, zoom);
+        }
+    }
+
+    /** MEST-style floating AE2 terminal shell with a restrained content well. */
+    private int canvasLeft() {
+        return settingsOpen ? SETTINGS_WIDTH + 8 : SETTINGS_COLLAPSED_WIDTH + 6;
+    }
+
+    private int canvasRight() {
+        return hasInspectorSelection() && this.width >= 520 ? this.width - INSPECTOR_WIDTH - 8 : this.width - 6;
+    }
+
+    private boolean hasInspectorSelection() {
+        return selectedNode != null || selectedLayerMaterial != null;
+    }
+
+    private void renderOverlayPanelBackdrops(GuiGraphics graphics, RecipeTreeTheme.Palette theme) {
+        if (hasInspectorSelection() && this.width >= 520) {
+            RecipeTreeTheme.drawFramedPanel(graphics, canvasRight() + 6, HEADER_HEIGHT + 4, this.width - 6,
+                    this.height - currentFooterHeight() - 4);
+        }
+        RecipeTreeTheme.drawRaisedPanel(graphics, 4, HEADER_HEIGHT + 2, canvasLeft() - 2,
+                this.height - currentFooterHeight() - 2);
+    }
+
+    private void renderDockPanels(GuiGraphics graphics, RecipeTreeTheme.Palette theme, int mouseX, int mouseY) {
+        renderInspectorPanel(graphics, theme);
+    }
+
+    private void renderInspectorPanel(GuiGraphics graphics, RecipeTreeTheme.Palette theme) {
+        if (!hasInspectorSelection() || this.width < 520) {
+            return;
+        }
+        int left = canvasRight() + 16;
+        int right = this.width - 16;
+        int top = HEADER_HEIGHT + 14;
+        graphics.drawString(this.font, Component.translatable("gui.jeict.recipe_tree.inspector_title"), left, top, theme.titleText(), false);
+        String label;
+        String amount;
+        @Nullable ITypedIngredient<?> ingredient;
+        @Nullable Component machineName;
+        boolean recipeNode;
+        boolean patternHint;
+        if (selectedNode != null) {
+            GraphNode graph = selectedNode.graph();
+            label = graph.title();
+            amount = graph.exactAmount().isBlank() ? graph.amount() : graph.exactAmount();
+            ingredient = graph.ingredient();
+            machineName = graph.machineName();
+            recipeNode = graph.recipeNode() != null;
+            patternHint = graph.showsPatternHint();
+        } else {
+            LayerMaterial material = selectedLayerMaterial;
+            label = material.label();
+            amount = computeRecipeQuantities
+                    ? Component.translatable("gui.jeict.recipe_tree.amount_exact", material.totalAmount()).getString()
+                    : material.amountLabel();
+            ingredient = material.ingredient();
+            machineName = material.machineName();
+            recipeNode = !material.recipeTargets().isEmpty();
+            patternHint = material.showsPatternHint();
+        }
+        RecipeTreeTheme.drawSlot(graphics, left, top + 20);
+        renderIngredientAt(graphics, ingredient, left + 1, top + 21);
+        graphics.drawString(this.font, trimToWidth(Component.literal(label), Math.max(20, right - left - 28)),
+                left + 26, top + 23, theme.titleText(), false);
+        int textY = top + 50;
+        if (amount != null && !amount.isBlank()) {
+            graphics.drawString(this.font, Component.literal(amount), left, textY, theme.metricText(), false);
+            textY += 15;
+        }
+        graphics.drawString(this.font, Component.translatable(recipeNode
+                ? "gui.jeict.recipe_tree.inspector_recipe"
+                : "gui.jeict.recipe_tree.inspector_material"), left, textY, theme.mutedText(), false);
+        textY += 15;
+        if (machineName != null) {
+            graphics.drawString(this.font, trimToWidth(machineName, right - left), left, textY, theme.hintText(), false);
+            textY += 15;
+        }
+        if (patternHint) {
+            graphics.drawString(this.font, Component.translatable("gui.jeict.recipe_tree.pattern_exists"),
+                    left, textY, theme.success(), false);
+            textY += 15;
+        }
+        graphics.fill(left, textY + 3, right, textY + 4, theme.gridMajorLine());
+        graphics.drawString(this.font, Component.translatable("gui.jeict.recipe_tree.inspector_action_hint"),
+                left, textY + 12, theme.hintText(), false);
+    }
+
+    private void renderFooterStatus(GuiGraphics graphics, RecipeTreeTheme.Palette theme) {
+        Component summary = Component.translatable("gui.jeict.recipe_tree.footer_summary",
+                topMaterials.size() + genericTopMaterialRenderData.size(), cachedMissingMaterialCount);
+        graphics.drawString(this.font, summary, canvasLeft() + 6, this.height - 21, theme.metricText(), false);
+    }
+
+    private void renderWorkspaceBackdrop(GuiGraphics graphics, RecipeTreeTheme.Palette theme) {
+        graphics.fill(0, 0, this.width, this.height, theme.backgroundOverlay());
+        if (this.width <= 10 || this.height <= 10) {
+            graphics.fill(0, 0, this.width, this.height, theme.chromeFill());
+            return;
+        }
+
+        // MEST panels float over the world with a compact two-pixel shadow.
+        graphics.fill(7, 7, this.width - 1, this.height - 1, 0x66000000);
+        graphics.fill(this.width - 7, 7, this.width - 3, this.height - 3, 0x66000000);
+        RecipeTreeTheme.drawRaisedPanel(graphics, 3, 3, this.width - 5, this.height - 5);
+
+        // AE2 headers remain part of the light dialog surface, separated by two hairlines.
+        graphics.fill(8, HEADER_HEIGHT - 2, this.width - 10, HEADER_HEIGHT - 1, theme.raisedShadow());
+        graphics.fill(8, HEADER_HEIGHT - 1, this.width - 10, HEADER_HEIGHT, theme.raisedHighlight());
+        int footerHeight = currentFooterHeight();
+        graphics.fill(8, this.height - footerHeight, this.width - 10,
+                this.height - footerHeight + 1, theme.raisedShadow());
+        graphics.fill(8, this.height - footerHeight + 1, this.width - 10,
+                this.height - footerHeight + 2, theme.raisedHighlight());
+
+        int wellLeft = canvasLeft();
+        int wellTop = HEADER_HEIGHT;
+        int wellRight = canvasRight();
+        int wellBottom = this.height - footerHeight;
+        if (wellRight > wellLeft + 2 && wellBottom > wellTop + 2) {
+            RecipeTreeTheme.drawSunkenPanel(graphics, wellLeft, wellTop, wellRight, wellBottom);
+        }
+    }
+
+    private void renderWorkspaceFrame(GuiGraphics graphics, RecipeTreeTheme.Palette theme) {
+        // Re-stroke the well rim so clipped graph content never paints over it.
+        int left = canvasLeft();
+        int top = HEADER_HEIGHT;
+        int right = canvasRight();
+        int bottom = this.height - currentFooterHeight();
+        RecipeTreeTheme.drawBorder(graphics, left, top, right, bottom, theme.chromeBorder());
+        if (right - left > 2 && bottom - top > 2) {
+            graphics.fill(left + 1, top + 1, right - 1, top + 2, theme.raisedShadow());
+            graphics.fill(left + 1, top + 1, left + 2, bottom - 1, theme.raisedShadow());
+            graphics.fill(left + 1, bottom - 2, right - 1, bottom - 1, theme.raisedHighlight());
+            graphics.fill(right - 2, top + 1, right - 1, bottom - 1, theme.raisedHighlight());
+        }
+    }
+
+
+    private boolean isInsideWorkspace(double mouseX, double mouseY) {
+        return mouseX >= canvasLeft() + 2 && mouseX < canvasRight() - 2
+                && mouseY >= HEADER_HEIGHT + 2 && mouseY < this.height - currentFooterHeight() - 2;
+    }
+
+    private int currentFooterHeight() {
+        boolean hasActions = (encodeButton != null && encodeButton.visible)
+                || (uploadButton != null && uploadButton.visible);
+        return hasActions ? FOOTER_HEIGHT : 8;
+    }
+
+    /**
+     * Vanilla widgets stay for focus/narration/hit-testing only (they render
+     * nothing). This paints AE2 terminal buttons on top.
+     */
+    private void renderAe2WidgetChrome(GuiGraphics graphics, int mouseX, int mouseY) {
+        renderAe2Button(graphics, backButton, mouseX, mouseY);
+        renderAe2Button(graphics, computeQuantitiesButton, mouseX, mouseY);
+        renderAe2Button(graphics, styleButton, mouseX, mouseY);
+        renderAe2Button(graphics, toggleExistingPatternButton, mouseX, mouseY);
+        renderAe2Button(graphics, autoUniqueRecipeButton, mouseX, mouseY);
+        renderAe2Button(graphics, memoryReadingButton, mouseX, mouseY);
+        renderAe2Button(graphics, autoMergeButton, mouseX, mouseY);
+        renderAe2Button(graphics, zoomOutButton, mouseX, mouseY);
+        renderAe2Button(graphics, zoomInButton, mouseX, mouseY);
+        renderAe2Button(graphics, fitViewButton, mouseX, mouseY);
+        renderAe2Button(graphics, settingsButton, mouseX, mouseY);
+        renderAe2Button(graphics, encodeButton, mouseX, mouseY);
+        renderAe2Button(graphics, uploadButton, mouseX, mouseY);
+    }
+
+
+
+    private void renderBatchText(GuiGraphics graphics, RecipeTreeTheme.Palette theme) {
+        RootBatchAnchor anchor = updateBatchBadgeBounds();
+        if (anchor == null) {
+            return;
+        }
+        int x = anchor.right() + BATCH_TEXT_GAP;
+        int y = anchor.y() + Math.max(0, (NODE_HEIGHT - this.font.lineHeight) / 2);
+        graphics.drawString(this.font, batchCountLabel(), x, y, theme.hintText(), false);
+    }
+
+    private void renderAe2Button(GuiGraphics graphics, @Nullable Button button, int mouseX, int mouseY) {
+        if (button == null || !button.visible) {
+            return;
+        }
+        RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
+        int x = button.getX();
+        int y = button.getY();
+        int width = button.getWidth();
+        int height = button.getHeight();
+        boolean hovered = button.active && (button.isFocused()
+                || (mouseX >= x && mouseX < x + width && mouseY >= y && mouseY < y + height));
+        RecipeTreeTheme.drawButton(graphics, x, y, width, height, hovered, button.active);
+        if (button == settingsButton || (!settingsOpen && isSidebarControlButton(button))) {
+            renderSidebarIcon(graphics, button, x + (width - 8) / 2, y + (height - 8) / 2, hovered);
+            return;
+        }
+        int textColor = button.active ? (hovered ? theme.controlHoverText() : theme.controlText()) : theme.mutedText();
+        Component message = button.getMessage();
+        int textX = x + Math.max(2, (width - this.font.width(message)) / 2);
+        int textY = y + (height - this.font.lineHeight) / 2;
+        graphics.drawString(this.font, message, textX, textY, textColor, false);
+    }
+
+    private boolean isSidebarControlButton(Button button) {
+        return button == autoMergeButton || button == computeQuantitiesButton || button == autoUniqueRecipeButton
+                || button == memoryReadingButton || button == toggleExistingPatternButton || button == styleButton;
+    }
+
+    private void renderSidebarIcon(GuiGraphics graphics, Button button, int x, int y, boolean hovered) {
+        RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
+        boolean enabled = sidebarControlEnabled(button);
+        int color = hovered ? theme.controlHoverText() : (enabled ? theme.accent() : theme.mutedText());
+        if (button == settingsButton) {
+            if (settingsOpen) {
+                graphics.fill(x + 2, y + 1, x + 3, y + 7, color);
+                graphics.fill(x + 3, y + 2, x + 4, y + 6, color);
+                graphics.fill(x + 4, y + 3, x + 5, y + 5, color);
+            } else {
+                graphics.fill(x + 5, y + 1, x + 6, y + 7, color);
+                graphics.fill(x + 4, y + 2, x + 5, y + 6, color);
+                graphics.fill(x + 3, y + 3, x + 4, y + 5, color);
+            }
+            return;
+        }
+        if (button == autoMergeButton) {
+            graphics.fill(x, y + 1, x + 3, y + 2, color);
+            graphics.fill(x, y + 6, x + 3, y + 7, color);
+            graphics.fill(x + 2, y + 2, x + 4, y + 6, color);
+            graphics.fill(x + 4, y + 3, x + 7, y + 5, color);
+            graphics.fill(x + 6, y + 2, x + 8, y + 6, color);
+        } else if (button == computeQuantitiesButton) {
+            graphics.fill(x + 1, y + 5, x + 2, y + 8, color);
+            graphics.fill(x + 3, y + 3, x + 4, y + 8, color);
+            graphics.fill(x + 5, y + 1, x + 6, y + 8, color);
+        } else if (button == autoUniqueRecipeButton) {
+            graphics.fill(x + 1, y + 1, x + 2, y + 7, color);
+            graphics.fill(x + 2, y + 3, x + 5, y + 4, color);
+            graphics.fill(x + 5, y + 2, x + 7, y + 5, color);
+        } else if (button == memoryReadingButton) {
+            RecipeTreeTheme.drawBorder(graphics, x + 1, y + 1, x + 7, y + 7, color);
+            graphics.fill(x + 3, y + 3, x + 5, y + 5, color);
+        } else if (button == toggleExistingPatternButton) {
+            RecipeTreeTheme.drawBorder(graphics, x + 1, y, x + 7, y + 8, color);
+            graphics.fill(x + 3, y + 2, x + 6, y + 3, color);
+            graphics.fill(x + 3, y + 4, x + 6, y + 5, color);
+        } else if (button == styleButton) {
+            graphics.fill(x + 1, y + 1, x + 3, y + 3, color);
+            graphics.fill(x + 5, y + 1, x + 7, y + 3, color);
+            graphics.fill(x + 1, y + 5, x + 3, y + 7, color);
+            graphics.fill(x + 5, y + 5, x + 7, y + 7, color);
+        }
+        if (!enabled && button != styleButton) {
+            int slash = hovered ? theme.danger() : theme.controlText();
+            for (int offset = 0; offset < 6; offset++) {
+                graphics.fill(x + 1 + offset, y + 6 - offset, x + 2 + offset, y + 7 - offset, slash);
+            }
+        }
+    }
+
+    private boolean sidebarControlEnabled(Button button) {
+        if (button == autoMergeButton) {
+            return autoMergeSameMaterials;
+        }
+        if (button == computeQuantitiesButton) {
+            return computeRecipeQuantities;
+        }
+        if (button == autoUniqueRecipeButton) {
+            return autoExpandUniqueEncodableRecipe;
+        }
+        if (button == memoryReadingButton) {
+            return readRememberedSelections;
+        }
+        if (button == toggleExistingPatternButton) {
+            return !context.disableExistingPatternExpansion();
+        }
+        return true;
     }
 
     private void renderEdges(GuiGraphics graphics) {
+        if (edgeRows.isEmpty()) {
+            return;
+        }
         RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
-        for (Edge edge : edges) {
-            int startX = edge.parent().x() + edge.parent().graph().width() / 2;
-            int startY = edge.parent().y() + NODE_HEIGHT;
-            int endX = edge.child().x() + edge.child().graph().width() / 2;
-            int endY = edge.child().y();
-            if (!isLogicalRectVisible(Math.min(startX, endX) - 2, startY, Math.max(startX, endX) + 2, endY)) {
-                continue;
+        int minRowY = (int) Math.floor(visibleLogicalMinY - LEVEL_GAP - NODE_HEIGHT);
+        int maxRowY = (int) Math.ceil(visibleLogicalMaxY);
+        for (List<Edge> row : edgeRows.subMap(minRowY, true, maxRowY, true).values()) {
+            for (Edge edge : row) {
+                if (edgeMinX(edge) > visibleLogicalMaxX) {
+                    break;
+                }
+                if (edgeMaxX(edge) < visibleLogicalMinX) {
+                    continue;
+                }
+                int startX = edge.parent().x() + edge.parent().graph().width() / 2;
+                int startY = edge.parent().y() + NODE_HEIGHT;
+                int endX = edge.child().x() + edge.child().graph().width() / 2;
+                int endY = edge.child().y();
+                lastRenderedEdgeCount++;
+                int midY = startY + Math.max(1, (endY - startY) / 2);
+                graphics.fill(startX, startY, startX + 1, midY, theme.edge());
+                graphics.fill(Math.min(startX, endX), midY, Math.max(startX, endX) + 1, midY + 1, theme.edge());
+                graphics.fill(endX, midY, endX + 1, endY, theme.edge());
             }
-            lastRenderedEdgeCount++;
-            int midY = startY + 12;
-            graphics.fill(startX - 1, startY, startX + 2, midY, theme.edgeShadow());
-            graphics.fill(Math.min(startX, endX), midY - 1, Math.max(startX, endX) + 1, midY + 2, theme.edgeShadow());
-            graphics.fill(endX - 1, midY, endX + 2, endY, theme.edgeShadow());
-            graphics.fill(startX, startY, startX + 1, midY, theme.edge());
-            graphics.fill(Math.min(startX, endX), midY, Math.max(startX, endX) + 1, midY + 1, theme.edge());
-            graphics.fill(endX, midY, endX + 1, endY, theme.edge());
         }
     }
 
     private void renderNodes(GuiGraphics graphics) {
         RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
+        boolean detailed = isDetailedNodeRendering();
+        int lowZoomIconGap = detailed ? 0 : Math.max(NODE_MAIN_SIZE, (int) Math.ceil(14.0D / zoom));
         alternativeButtonBounds.clear();
-        for (PositionedNode node : positionedNodes) {
-            int x = node.x();
-            int y = node.y();
-            int width = node.graph().width();
-            if (!isLogicalRectVisible(x, y, x + width, y + NODE_HEIGHT)) {
-                continue;
-            }
-            lastRenderedNodeCount++;
-            int border = node.graph().children().isEmpty() ? theme.leafBorder() : theme.nodeBorder();
-            graphics.fill(x, y, x + width, y + NODE_HEIGHT, theme.nodeFill());
-            graphics.fill(x, y, x + width, y + 1, border);
-            graphics.fill(x, y + NODE_HEIGHT - 1, x + width, y + NODE_HEIGHT, border);
-            graphics.fill(x, y, x + 1, y + NODE_HEIGHT, border);
-            graphics.fill(x + width - 1, y, x + width, y + NODE_HEIGHT, border);
-
-            renderIngredientAt(graphics, node.graph().ingredient(), x + 4, y + 5);
-            if (!node.graph().amount().isBlank()) {
-                graphics.drawString(this.font, node.graph().amount(), x + 24, y + 9, theme.mutedText(), false);
-            }
-            if (node.graph().machineIcon() != null) {
-                renderMachineSlot(graphics, node.graph().machineIcon(), x + width - MACHINE_SLOT_SIZE - 3, y + 4);
-            }
-            if (node.graph().mergedLeaf() != null && node.graph().mergedLeaf().representative().hasAlternativeChoices()) {
-                int buttonX = x + width - 13;
-                int buttonY = y + 8;
-                renderAlternativeButton(graphics, buttonX, buttonY);
-                alternativeButtonBounds.add(AlternativeButtonBounds.forLeaf(node.graph().mergedLeaf(), buttonX, buttonY, 10, 10));
-            }
-
-            if (showsCollapseButton(node)) {
-                int btnX = x + width + 2;
-                int btnY = y + 8;
-                drawSmallControl(graphics, btnX, btnY, 10, "-", theme.controlText());
+        visiblePositionedNodes.clear();
+        if (positionedNodeRows.isEmpty()) {
+            return;
+        }
+        int minRowY = (int) Math.floor(visibleLogicalMinY - NODE_HEIGHT);
+        int maxRowY = (int) Math.ceil(visibleLogicalMaxY);
+        for (List<PositionedNode> row : positionedNodeRows.subMap(minRowY, true, maxRowY, true).values()) {
+            int lastIconX = Integer.MIN_VALUE / 2;
+            for (PositionedNode node : row) {
+                int x = node.x();
+                int y = node.y();
+                int width = node.graph().width();
+                if (x > visibleLogicalMaxX) {
+                    break;
+                }
+                if (x + width < visibleLogicalMinX) {
+                    continue;
+                }
+                visiblePositionedNodes.add(node);
+                lastRenderedNodeCount++;
+                int accent = node.graph().showsPatternHint()
+                        ? theme.patternHintBorder()
+                        : (node.graph().recipeNode() != null ? theme.controlHoverText() : theme.mutedText());
+                RecipeTreeTheme.drawMarkdownNode(graphics, x, y, x + width, y + NODE_HEIGHT, accent);
+                if (node == selectedNode) {
+                    RecipeTreeTheme.drawBorder(graphics, x - 1, y - 1, x + width + 1, y + NODE_HEIGHT + 1, theme.accent());
+                }
+                boolean genericIngredient = node.graph().ingredient() != null
+                        && extractItemStack(node.graph().ingredient()).isEmpty();
+                boolean renderIcons = genericIngredient || detailed || x - lastIconX >= lowZoomIconGap;
+                if (renderIcons) {
+                    renderIngredientAt(graphics, node.graph().ingredient(), x + 6, y + 6);
+                    lastIconX = x;
+                }
+                if (detailed) {
+                    renderNodeAmount(graphics, node.graph().amount(), x, y);
+                }
+                int partX = x + NODE_MAIN_SIZE + NODE_PART_GAP;
+                if (node.graph().machineIcon() != null) {
+                    if (renderIcons) {
+                        renderMachineSlot(graphics, node.graph().machineIcon(), partX, y + 5);
+                    }
+                    partX += MACHINE_SLOT_SIZE + NODE_PART_GAP;
+                }
+                if (node.graph().mergedLeaf() != null && node.graph().mergedLeaf().representative().hasAlternativeChoices()) {
+                    int buttonX = partX;
+                    int buttonY = y + 9;
+                    renderAlternativeButton(graphics, buttonX, buttonY);
+                    alternativeButtonBounds.add(AlternativeButtonBounds.forLeaf(node.graph().mergedLeaf(), buttonX, buttonY, 10, 10));
+                }
+                if (showsCollapseButton(node)) {
+                    int btnX = x + width - NODE_PART_PADDING - 10;
+                    int btnY = y + 9;
+                    renderSmallControlIcon(graphics, "-", btnX, btnY, 10);
+                }
             }
         }
+    }
+
+    private int mergedRowX(int startX, LayerRowRenderCache cache) {
+        return startX + cachedMergedAnchorOffset - cache.anchorCenterOffset();
+    }
+
+    private static int lowerBound(int[] values, int target) {
+        int low = 0;
+        int high = values.length;
+        while (low < high) {
+            int mid = (low + high) >>> 1;
+            if (values[mid] < target) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        return low;
+    }
+
+    private List<Integer> visibleLayerMaterialCenters(LayerRow row, int rowX) {
+        LayerRowRenderCache cache = mergedRowRenderCaches.get(row);
+        if (cache == null || cache.centerOffsets().length == 0) {
+            return List.of();
+        }
+        int minOffset = (int) Math.floor(visibleLogicalMinX - rowX - NODE_MAIN_SIZE);
+        int maxOffset = (int) Math.ceil(visibleLogicalMaxX - rowX + NODE_MAIN_SIZE);
+        int start = lowerBound(cache.centerOffsets(), minOffset);
+        List<Integer> centers = new ArrayList<>();
+        for (int i = start; i < cache.centerOffsets().length; i++) {
+            int offset = cache.centerOffsets()[i];
+            if (offset > maxOffset) {
+                break;
+            }
+            centers.add(rowX + offset);
+        }
+        return centers;
     }
 
     private void renderMergedLayerEdges(GuiGraphics graphics) {
@@ -1138,85 +2076,136 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             return;
         }
         RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
-        int contentWidth = computeMergedLayerContentWidth();
         int startX = 36;
         int baseY = 42 + TOP_MATERIALS_OFFSET;
-        for (int idx = 0; idx < mergedLayerRows.size() - 1; idx++) {
+        int firstEdge = Math.max(0, (int) Math.floor((visibleLogicalMinY - baseY) / LEVEL_GAP) - 1);
+        int lastEdge = Math.min(mergedLayerRows.size() - 2,
+                (int) Math.floor((visibleLogicalMaxY - baseY) / LEVEL_GAP));
+        if (firstEdge > lastEdge) {
+            return;
+        }
+        for (int idx = firstEdge; idx <= lastEdge; idx++) {
             LayerRow rowA = mergedLayerRows.get(idx);
             LayerRow rowB = mergedLayerRows.get(idx + 1);
-            int rowAX = startX + Math.max(0, (contentWidth - rowA.width()) / 2);
-            int rowBX = startX + Math.max(0, (contentWidth - rowB.width()) / 2);
-            int rowAY = baseY + idx * LEVEL_GAP;
-            int rowBY = baseY + (idx + 1) * LEVEL_GAP;
-            int startXc = rowAX + rowA.width() / 2;
-            int startY = rowAY + NODE_HEIGHT;
-            int endXc = rowBX + rowB.width() / 2;
-            int endY = rowBY;
-            if (!isLogicalRectVisible(Math.min(startXc, endXc) - 2, startY, Math.max(startXc, endXc) + 2, endY)) {
+            LayerRowRenderCache rowCacheA = mergedRowRenderCaches.get(rowA);
+            LayerRowRenderCache rowCacheB = mergedRowRenderCaches.get(rowB);
+            if (rowCacheA == null || rowCacheB == null) {
                 continue;
             }
-            lastRenderedEdgeCount++;
-            int midY = startY + Math.max(8, (endY - startY) / 2);
-            graphics.fill(startXc - 1, startY, startXc + 2, midY, theme.edgeShadow());
-            graphics.fill(Math.min(startXc, endXc), midY - 1, Math.max(startXc, endXc) + 1, midY + 2, theme.edgeShadow());
-            graphics.fill(endXc - 1, midY, endXc + 2, endY, theme.edgeShadow());
-            graphics.fill(startXc, startY, startXc + 1, midY, theme.edge());
-            graphics.fill(Math.min(startXc, endXc), midY, Math.max(startXc, endXc) + 1, midY + 1, theme.edge());
-            graphics.fill(endXc, midY, endXc + 1, endY, theme.edge());
+            int rowAX = mergedRowX(startX, rowCacheA);
+            int rowBX = mergedRowX(startX, rowCacheB);
+            int startY = baseY + idx * LEVEL_GAP + NODE_HEIGHT;
+            int endY = baseY + (idx + 1) * LEVEL_GAP;
+            int midY = startY + Math.max(1, (endY - startY) / 2);
+            List<Integer> parentCenters = visibleLayerMaterialCenters(rowA, rowAX);
+            List<Integer> childCenters = visibleLayerMaterialCenters(rowB, rowBX);
+            if (parentCenters.isEmpty() || childCenters.isEmpty()) {
+                continue;
+            }
+            int minX = Integer.MAX_VALUE;
+            int maxX = Integer.MIN_VALUE;
+            for (int center : parentCenters) {
+                minX = Math.min(minX, center);
+                maxX = Math.max(maxX, center);
+            }
+            for (int center : childCenters) {
+                minX = Math.min(minX, center);
+                maxX = Math.max(maxX, center);
+            }
+            if (!isLogicalRectVisible(minX - 1, startY, maxX + 1, endY)) {
+                continue;
+            }
+            for (int center : parentCenters) {
+                graphics.fill(center, startY, center + 1, midY + 1, theme.edge());
+            }
+            graphics.fill(minX, midY, maxX + 1, midY + 1, theme.edge());
+            for (int center : childCenters) {
+                graphics.fill(center, midY, center + 1, endY, theme.edge());
+            }
+            lastRenderedEdgeCount += parentCenters.size() + childCenters.size();
         }
     }
 
     private void renderMergedLayers(GuiGraphics graphics) {
         RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
+        boolean detailed = isDetailedNodeRendering();
+        int lowZoomIconGap = detailed ? 0 : Math.max(NODE_MAIN_SIZE, (int) Math.ceil(14.0D / zoom));
         layerMaterialBounds.clear();
         alternativeButtonBounds.clear();
         if (mergedLayerRows.isEmpty()) {
             return;
         }
-        int contentWidth = computeMergedLayerContentWidth();
         int startX = 36;
         int y = 42 + TOP_MATERIALS_OFFSET;
-        for (int i = 0; i < mergedLayerRows.size(); i++) {
+        int firstRow = Math.max(0,
+                (int) Math.ceil((visibleLogicalMinY - y - NODE_HEIGHT) / LEVEL_GAP));
+        int lastRow = Math.min(mergedLayerRows.size() - 1,
+                (int) Math.floor((visibleLogicalMaxY - y) / LEVEL_GAP));
+        if (firstRow > lastRow) {
+            return;
+        }
+        for (int i = firstRow; i <= lastRow; i++) {
             LayerRow row = mergedLayerRows.get(i);
-            int rowX = startX + Math.max(0, (contentWidth - row.width()) / 2);
+            LayerRowRenderCache rowCache = mergedRowRenderCaches.get(row);
+            if (rowCache == null) {
+                continue;
+            }
+            int rowX = mergedRowX(startX, rowCache);
             int rowY = y + i * LEVEL_GAP;
-            if (!isLogicalRectVisible(rowX, rowY, rowX + row.width(), rowY + NODE_HEIGHT)) {
+            if (!isLogicalRectVisible(rowX, rowY, rowX + rowCache.width(), rowY + NODE_HEIGHT)) {
                 continue;
             }
             lastRenderedLayerCount++;
-            graphics.fill(rowX, rowY, rowX + row.width(), rowY + NODE_HEIGHT, theme.nodeFill());
-            drawBorder(graphics, rowX, rowY, rowX + row.width(), rowY + NODE_HEIGHT, theme.nodeBorder());
-
-            int currentX = rowX + 4;
-            for (LayerMaterial material : row.materials()) {
+            int relativeMinX = (int) Math.floor(visibleLogicalMinX - rowX);
+            int startIndex = lowerBound(rowCache.rightOffsets(), relativeMinX);
+            int lastIconX = Integer.MIN_VALUE / 2;
+            for (int materialIndex = startIndex; materialIndex < row.materials().size(); materialIndex++) {
+                LayerMaterial material = row.materials().get(materialIndex);
+                int currentX = rowX + rowCache.leftOffsets()[materialIndex];
                 int materialWidth = material.width();
+                if (currentX > visibleLogicalMaxX) {
+                    break;
+                }
                 if (!isLogicalRectVisible(currentX, rowY, currentX + materialWidth, rowY + NODE_HEIGHT)) {
-                    currentX += materialWidth + 4;
                     continue;
                 }
                 lastRenderedLayerMaterialCount++;
-                int innerBorder = material.showsPatternHint() ? theme.patternHintBorder() : theme.nodeBorder();
-                graphics.fill(currentX, rowY + 3, currentX + materialWidth, rowY + NODE_HEIGHT - 3, theme.materialFill());
-                drawBorder(graphics, currentX, rowY + 3, currentX + materialWidth, rowY + NODE_HEIGHT - 3, innerBorder);
-                renderIngredientAt(graphics, material.ingredient(), currentX + 2, rowY + 5);
-                if (!material.amountLabel().isBlank()) {
-                    graphics.drawString(this.font, material.amountLabel(), currentX + 22, rowY + 9,
-                            theme.mutedText(), false);
+                int accent = material.showsPatternHint()
+                        ? theme.patternHintBorder()
+                        : (!material.recipeTargets().isEmpty() ? theme.controlHoverText() : theme.mutedText());
+                RecipeTreeTheme.drawMarkdownNode(graphics, currentX, rowY,
+                        currentX + materialWidth, rowY + NODE_HEIGHT, accent);
+                if (material == selectedLayerMaterial) {
+                    RecipeTreeTheme.drawBorder(graphics, currentX - 1, rowY - 1,
+                            currentX + materialWidth + 1, rowY + NODE_HEIGHT + 1, theme.accent());
                 }
+                boolean renderIcons = detailed || currentX - lastIconX >= lowZoomIconGap;
+                if (renderIcons) {
+                    renderIngredientAt(graphics, material.ingredient(), currentX + 6, rowY + 6);
+                    lastIconX = currentX;
+                }
+                if (detailed) {
+                    renderNodeAmount(graphics, material.amountLabel(), currentX, rowY);
+                }
+                int partX = currentX + NODE_MAIN_SIZE + NODE_PART_GAP;
                 if (material.machineIcon() != null) {
-                    renderMachineSlot(graphics, material.machineIcon(), currentX + materialWidth - MACHINE_SLOT_SIZE - 3, rowY + 4);
+                    if (renderIcons) {
+                        renderMachineSlot(graphics, material.machineIcon(), partX, rowY + 5);
+                    }
+                    partX += MACHINE_SLOT_SIZE + NODE_PART_GAP;
                 }
-                if (material.hasAlternatives() && material.hasUnresolvedLeaves()) {
+                if (detailed && material.hasAlternatives() && material.hasUnresolvedLeaves()) {
                     MergedLeaf altLeaf = material.leafProjection();
                     if (altLeaf != null) {
-                        int buttonX = currentX + materialWidth - 13;
-                        int buttonY = rowY + 8;
+                        int buttonX = partX;
+                        int buttonY = rowY + 9;
                         renderAlternativeButton(graphics, buttonX, buttonY);
                         alternativeButtonBounds.add(AlternativeButtonBounds.forLeaf(altLeaf, buttonX, buttonY, 10, 10));
                     }
                 }
-                layerMaterialBounds.add(new LayerMaterialBounds(row, material, currentX, rowY, materialWidth, NODE_HEIGHT));
-                currentX += materialWidth + 4;
+                if (detailed) {
+                    layerMaterialBounds.add(new LayerMaterialBounds(row, material, currentX, rowY, materialWidth, NODE_HEIGHT));
+                }
             }
         }
     }
@@ -1224,93 +2213,82 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private void renderTopMaterialsMerged(GuiGraphics graphics) {
         RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
         topMaterialBounds.clear();
+        surplusMaterialBounds.clear();
+        genericTopMaterialBounds.clear();
         topMaterialsPinButtonBounds = null;
-        if (topMaterials == null || topMaterials.isEmpty() || mergedLayerRows.isEmpty()) {
+        if ((topMaterialRenderData.isEmpty() && genericTopMaterialRenderData.isEmpty()) || mergedLayerRows.isEmpty()) {
             return;
         }
         LayerRow rootRow = mergedLayerRows.getFirst();
+        LayerRowRenderCache rootRowCache = mergedRowRenderCaches.get(rootRow);
+        if (rootRowCache == null) {
+            return;
+        }
         int contentWidth = computeMergedLayerContentWidth();
         int startX = 36;
-        int rowX = startX + Math.max(0, (contentWidth - rootRow.width()) / 2);
+        int rowX = mergedRowX(startX, rootRowCache);
         int rootY = 42 + TOP_MATERIALS_OFFSET;
-        int rootCenterX = rowX + rootRow.width() / 2;
+        int rootCenterX = rowX + rootRowCache.anchorCenterOffset();
 
         int gap = 4;
         int totalWidth = -gap;
-        int[] widths = new int[topMaterials.size()];
-        String[] labels = new String[topMaterials.size()];
-
-        int[] remainingCounts = new int[topMaterials.size()];
-        int[] labelColors = new int[topMaterials.size()];
-        for (int i = 0; i < topMaterials.size(); i++) {
-            RequestedIngredient mat = topMaterials.get(i);
-            int displayCount = computeRecipeQuantities ? Math.max(1, mat.count()) : 1;
-            remainingCounts[i] = displayCount;
-            labelColors[i] = inventoryAdjustedLabelColor(mat, displayCount);
-            String label = computeRecipeQuantities ? "x" + formatCompactCount(displayCount) : "";
-            labels[i] = label;
-            int w = 24 + (label.isEmpty() ? 0 : this.font.width(label) + 6);
-            if (mat.alternatives().size() > 1) {
-                w += 14;
-            }
-            widths[i] = w;
-            totalWidth += w + gap;
+        for (TopMaterialRenderData data : topMaterialRenderData) {
+            totalWidth += data.width() + gap;
+        }
+        for (GenericTopMaterialRenderData data : genericTopMaterialRenderData) {
+            totalWidth += data.width() + gap;
         }
         if (totalWidth < 0) {
             return;
         }
 
         int materialsStartX = rootCenterX - totalWidth / 2;
-        int panelY = rootY - NODE_HEIGHT - 24;
+        int surplusWidth = totalMaterialRowWidth(surplusMaterialRenderData, gap);
+        int surplusStartX = rootCenterX - surplusWidth / 2;
+        int panelY = rootY - NODE_HEIGHT * 2 - 28;
+        int surplusY = panelY + NODE_HEIGHT + 16;
         int pinX = materialsStartX + totalWidth + 8;
-        if (!isLogicalRectVisible(materialsStartX - 4, panelY - 4, pinX + 12, panelY + NODE_HEIGHT + 4)) {
+        int visibleLeft = surplusWidth > 0 ? Math.min(materialsStartX, surplusStartX) : materialsStartX;
+        int visibleRight = surplusWidth > 0 ? Math.max(pinX + 12, surplusStartX + surplusWidth) : pinX + 12;
+        int visibleBottom = surplusWidth > 0 ? surplusY + NODE_HEIGHT + 4 : panelY + NODE_HEIGHT + 4;
+        if (!isLogicalRectVisible(visibleLeft - 4, panelY - 14, visibleRight, visibleBottom)) {
             return;
         }
-        fillFramedPanel(graphics, materialsStartX - 4, panelY - 4, materialsStartX + totalWidth + 4, panelY + NODE_HEIGHT + 4,
-                theme.panelBorder(), theme.panelMiddle(), theme.panelInner());
+        graphics.drawString(this.font, Component.translatable("gui.jeict.recipe_tree.total_materials"),
+                materialsStartX, panelY - 12, theme.hintText(), false);
         renderTopMaterialsPinButton(graphics, pinX, panelY + 7);
 
         int currentX = materialsStartX;
-        for (int i = 0; i < topMaterials.size(); i++) {
-            RequestedIngredient mat = topMaterials.get(i);
-            int width = widths[i];
+        for (TopMaterialRenderData data : topMaterialRenderData) {
+            RequestedIngredient mat = data.material();
+            int width = data.width();
             if (width <= 0) {
                 continue;
             }
-            int slotBorder = shouldShowTopMaterialPatternHint(mat) ? theme.patternHintBorder() : theme.nodeBorder();
-
-            graphics.fill(currentX, panelY, currentX + width, panelY + NODE_HEIGHT, theme.nodeFill());
-            drawBorder(graphics, currentX, panelY, currentX + width, panelY + NODE_HEIGHT, slotBorder);
-
-            ItemStack itemStack = ItemStack.EMPTY;
-            if (!mat.alternatives().isEmpty()) {
-                int stackCount = computeRecipeQuantities ? remainingCounts[i] : 1;
-                itemStack = mat.alternatives().getFirst().copyWithCount(stackCount);
-            }
-            if (!itemStack.isEmpty()) {
-                lastRenderedTopMaterialCount++;
-                graphics.renderItem(itemStack, currentX + 4, panelY + 5);
-                if (!labels[i].isEmpty()) {
-                    graphics.drawString(this.font, labels[i], currentX + 24, panelY + 9, labelColors[i], false);
-                }
+            if (currentX + width >= visibleLogicalMinX && currentX <= visibleLogicalMaxX) {
+                int accent = data.showsPatternHint() ? theme.patternHintBorder() : theme.controlHoverText();
+                renderMaterialDemandSlot(graphics, data, currentX, panelY, width, accent);
                 topMaterialBounds.add(new TopMaterialBounds(mat, currentX, panelY, width, NODE_HEIGHT));
+                if (mat.alternatives().size() > 1) {
+                    int buttonX = currentX + width - 13;
+                    int buttonY = panelY + 8;
+                    renderAlternativeButton(graphics, buttonX, buttonY);
+                    alternativeButtonBounds.add(AlternativeButtonBounds.forMaterial(mat, buttonX, buttonY, 10, 10));
+                }
             }
-            if (mat.alternatives().size() > 1) {
-                int buttonX = currentX + width - 13;
-                int buttonY = panelY + 8;
-                renderAlternativeButton(graphics, buttonX, buttonY);
-                alternativeButtonBounds.add(AlternativeButtonBounds.forMaterial(mat, buttonX, buttonY, 10, 10));
-            }
-
             currentX += width + gap;
         }
+        renderGenericTopMaterialRow(graphics, theme, currentX, panelY, gap);
+        renderSurplusMaterialRow(graphics, theme, surplusStartX, surplusY, gap);
     }
 
     private void renderTopMaterials(GuiGraphics graphics) {
         RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
         topMaterialBounds.clear();
+        surplusMaterialBounds.clear();
+        genericTopMaterialBounds.clear();
         topMaterialsPinButtonBounds = null;
-        if (topMaterials == null || topMaterials.isEmpty() || rootNode == null) {
+        if ((topMaterialRenderData.isEmpty() && genericTopMaterialRenderData.isEmpty()) || rootNode == null) {
             return;
         }
 
@@ -1326,90 +2304,172 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
 
         int gap = 4;
         int totalWidth = -gap;
-        int[] widths = new int[topMaterials.size()];
-        String[] labels = new String[topMaterials.size()];
-
-        int[] remainingCounts = new int[topMaterials.size()];
-        int[] labelColors = new int[topMaterials.size()];
-        for (int i = 0; i < topMaterials.size(); i++) {
-            RequestedIngredient mat = topMaterials.get(i);
-            int displayCount = computeRecipeQuantities ? Math.max(1, mat.count()) : 1;
-            remainingCounts[i] = displayCount;
-            labelColors[i] = inventoryAdjustedLabelColor(mat, displayCount);
-            String label = computeRecipeQuantities ? "x" + formatCompactCount(displayCount) : "";
-            labels[i] = label;
-            int w = 24 + (label.isEmpty() ? 0 : this.font.width(label) + 6);
-            if (mat.alternatives().size() > 1) {
-                w += 14;
-            }
-            widths[i] = w;
-            totalWidth += w + gap;
+        for (TopMaterialRenderData data : topMaterialRenderData) {
+            totalWidth += data.width() + gap;
+        }
+        for (GenericTopMaterialRenderData data : genericTopMaterialRenderData) {
+            totalWidth += data.width() + gap;
         }
         if (totalWidth < 0) {
             return;
         }
 
         int startX = rootCenterX - totalWidth / 2;
-        int y = rootY - NODE_HEIGHT - 24;
+        int surplusWidth = totalMaterialRowWidth(surplusMaterialRenderData, gap);
+        int surplusStartX = rootCenterX - surplusWidth / 2;
+        int y = rootY - NODE_HEIGHT * 2 - 28;
+        int surplusY = y + NODE_HEIGHT + 16;
         int pinX = startX + totalWidth + 8;
-        if (!isLogicalRectVisible(startX - 4, y - 4, pinX + 12, y + NODE_HEIGHT + 4)) {
+        int visibleLeft = surplusWidth > 0 ? Math.min(startX, surplusStartX) : startX;
+        int visibleRight = surplusWidth > 0 ? Math.max(pinX + 12, surplusStartX + surplusWidth) : pinX + 12;
+        int visibleBottom = surplusWidth > 0 ? surplusY + NODE_HEIGHT + 4 : y + NODE_HEIGHT + 4;
+        if (!isLogicalRectVisible(visibleLeft - 4, y - 14, visibleRight, visibleBottom)) {
             return;
         }
-        fillFramedPanel(graphics, startX - 4, y - 4, startX + totalWidth + 4, y + NODE_HEIGHT + 4,
-                theme.panelBorder(), theme.panelMiddle(), theme.panelInner());
+        graphics.drawString(this.font, Component.translatable("gui.jeict.recipe_tree.total_materials"),
+                startX, y - 12, theme.hintText(), false);
         renderTopMaterialsPinButton(graphics, pinX, y + 7);
 
         int currentX = startX;
-        for (int i = 0; i < topMaterials.size(); i++) {
-            RequestedIngredient mat = topMaterials.get(i);
-            int width = widths[i];
+        for (TopMaterialRenderData data : topMaterialRenderData) {
+            RequestedIngredient mat = data.material();
+            int width = data.width();
             if (width <= 0) {
                 continue;
             }
-            int slotBorder = shouldShowTopMaterialPatternHint(mat) ? theme.patternHintBorder() : theme.nodeBorder();
-
-            graphics.fill(currentX, y, currentX + width, y + NODE_HEIGHT, theme.nodeFill());
-            drawBorder(graphics, currentX, y, currentX + width, y + NODE_HEIGHT, slotBorder);
-
-            ItemStack itemStack = ItemStack.EMPTY;
-            if (!mat.alternatives().isEmpty()) {
-                int stackCount = computeRecipeQuantities ? remainingCounts[i] : 1;
-                itemStack = mat.alternatives().get(0).copyWithCount(stackCount);
-            }
-            if (!itemStack.isEmpty()) {
-                lastRenderedTopMaterialCount++;
-                graphics.renderItem(itemStack, currentX + 4, y + 5);
-                if (!labels[i].isEmpty()) {
-                    graphics.drawString(this.font, labels[i], currentX + 24, y + 9, labelColors[i], false);
-                }
+            if (currentX + width >= visibleLogicalMinX && currentX <= visibleLogicalMaxX) {
+                int accent = data.showsPatternHint() ? theme.patternHintBorder() : theme.controlHoverText();
+                renderMaterialDemandSlot(graphics, data, currentX, y, width, accent);
                 topMaterialBounds.add(new TopMaterialBounds(mat, currentX, y, width, NODE_HEIGHT));
+                if (mat.alternatives().size() > 1) {
+                    int buttonX = currentX + width - 13;
+                    int buttonY = y + 8;
+                    renderAlternativeButton(graphics, buttonX, buttonY);
+                    alternativeButtonBounds.add(AlternativeButtonBounds.forMaterial(mat, buttonX, buttonY, 10, 10));
+                }
             }
-            if (mat.alternatives().size() > 1) {
-                int buttonX = currentX + width - 13;
-                int buttonY = y + 8;
-                renderAlternativeButton(graphics, buttonX, buttonY);
-                alternativeButtonBounds.add(AlternativeButtonBounds.forMaterial(mat, buttonX, buttonY, 10, 10));
-            }
+            currentX += width + gap;
+        }
+        renderGenericTopMaterialRow(graphics, theme, currentX, y, gap);
+        renderSurplusMaterialRow(graphics, theme, surplusStartX, surplusY, gap);
+    }
 
+    private void renderGenericTopMaterialRow(GuiGraphics graphics, RecipeTreeTheme.Palette theme,
+            int startX, int y, int gap) {
+        int currentX = startX;
+        for (GenericTopMaterialRenderData data : genericTopMaterialRenderData) {
+            MergedLeaf leaf = data.leaf();
+            int width = data.width();
+            if (currentX + width >= visibleLogicalMinX && currentX <= visibleLogicalMaxX) {
+                RecipeTreeTheme.drawMarkdownNode(graphics, currentX, y, currentX + width, y + NODE_HEIGHT,
+                        theme.controlHoverText());
+                RecipeTreeTheme.drawSlot(graphics, currentX + 5, y + 5);
+                renderIngredientAt(graphics, leaf.ingredient(), currentX + 6, y + 6);
+                if (!data.label().isBlank()) {
+                    graphics.drawString(this.font, data.label(), currentX + 28, y + 9, theme.metricText(), false);
+                }
+                genericTopMaterialBounds.add(new GenericTopMaterialBounds(data, currentX, y, width, NODE_HEIGHT));
+                if (leaf.representative().hasAlternativeChoices()) {
+                    int buttonX = currentX + width - 13;
+                    int buttonY = y + 8;
+                    renderAlternativeButton(graphics, buttonX, buttonY);
+                    alternativeButtonBounds.add(AlternativeButtonBounds.forLeaf(leaf, buttonX, buttonY, 10, 10));
+                }
+            }
             currentX += width + gap;
         }
     }
 
+    private int totalMaterialRowWidth(List<TopMaterialRenderData> dataList, int gap) {
+        if (dataList.isEmpty()) {
+            return 0;
+        }
+        int width = -gap;
+        for (TopMaterialRenderData data : dataList) {
+            width += data.width() + gap;
+        }
+        return Math.max(0, width);
+    }
+
+    private void renderSurplusMaterialRow(GuiGraphics graphics, RecipeTreeTheme.Palette theme,
+            int startX, int y, int gap) {
+        if (surplusMaterialRenderData.isEmpty()) {
+            return;
+        }
+        graphics.drawString(this.font, Component.translatable("gui.jeict.recipe_tree.surplus_materials"),
+                startX, y - 10, theme.hintText(), false);
+        int currentX = startX;
+        for (TopMaterialRenderData data : surplusMaterialRenderData) {
+            int width = data.width();
+            if (currentX + width >= visibleLogicalMinX && currentX <= visibleLogicalMaxX) {
+                renderMaterialDemandSlot(graphics, data, currentX, y, width, theme.enough());
+                surplusMaterialBounds.add(new TopMaterialBounds(data.material(), currentX, y, width, NODE_HEIGHT));
+            }
+            currentX += width + gap;
+        }
+    }
+
+    /** AE2 terminal-style material demand slot: recessed 18x18 item well and compact count label. */
+    private void renderMaterialDemandSlot(GuiGraphics graphics, TopMaterialRenderData data,
+            int x, int y, int width, int accent) {
+        RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
+        RecipeTreeTheme.drawMarkdownNode(graphics, x, y, x + width, y + NODE_HEIGHT, accent);
+        int slotX = x + 5;
+        int slotY = y + 5;
+        RecipeTreeTheme.drawSlot(graphics, slotX, slotY);
+        ItemStack itemStack = data.stack();
+        if (!itemStack.isEmpty()) {
+            lastRenderedTopMaterialCount++;
+            graphics.renderItem(itemStack, slotX + 1, slotY + 1);
+        }
+        if (!data.label().isEmpty()) {
+            graphics.drawString(this.font, data.label(), slotX + 23, y + 9, data.labelColor(), false);
+        }
+        if (data.showsPatternHint()) {
+            graphics.fill(x + 1, y + NODE_HEIGHT - 3, x + width - 1, y + NODE_HEIGHT - 1, theme.patternHintBorder());
+        }
+    }
+
     private void renderTopMaterialsPinButton(GuiGraphics graphics, int x, int y) {
-        drawSmallControl(graphics, x, y, 12, "+", RecipeTreeTheme.current().controlText());
+        RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
+        renderSmallControlIcon(graphics, "+", x, y, 12);
         topMaterialsPinButtonBounds = new TopMaterialsPinButtonBounds(x, y, 12, 12);
     }
 
     private void renderAlternativeButton(GuiGraphics graphics, int x, int y) {
-        drawSmallControl(graphics, x, y, 10, "v", RecipeTreeTheme.current().controlText());
+        renderSmallControlIcon(graphics, "v", x, y, 10);
+    }
+
+    private void renderSmallControlIcon(GuiGraphics graphics, String symbol, int x, int y, int size) {
+        RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
+        RecipeTreeTheme.drawSmallControl(graphics, x, y, size, false);
+        int textY = y + Math.max(0, (size - this.font.lineHeight) / 2);
+        graphics.drawCenteredString(this.font, symbol, x + size / 2, textY, theme.controlText());
+    }
+
+    private boolean isDetailedNodeRendering() {
+        return zoom >= 0.6D;
     }
 
     private void renderMachineSlot(GuiGraphics graphics, IDrawable icon, int x, int y) {
-        RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
-        graphics.fill(x, y, x + MACHINE_SLOT_SIZE, y + MACHINE_SLOT_SIZE, theme.machineSlotBorder());
-        graphics.fill(x + 1, y + 1, x + MACHINE_SLOT_SIZE - 1, y + MACHINE_SLOT_SIZE - 1, theme.machineSlotMiddle());
-        graphics.fill(x + 2, y + 2, x + MACHINE_SLOT_SIZE - 2, y + MACHINE_SLOT_SIZE - 2, theme.machineSlotInner());
+        RecipeTreeTheme.drawSlot(graphics, x, y);
         icon.draw(graphics, x + 1, y + 1);
+    }
+
+    private void renderNodeAmount(GuiGraphics graphics, String amount, int x, int y) {
+        if (amount == null || amount.isBlank()) {
+            return;
+        }
+        String label = amount.startsWith("x") ? amount.substring(1) : amount;
+        label = label.replace(" ", "");
+        int textWidth = this.font.width(label);
+        int maxWidth = NODE_MAIN_SIZE - 6;
+        float scale = Math.min(1.0F, maxWidth / (float) Math.max(1, textWidth));
+        graphics.pose().pushPose();
+        graphics.pose().translate(x + NODE_MAIN_SIZE - 2, y + NODE_HEIGHT - 2, 300.0F);
+        graphics.pose().scale(scale, scale, 1.0F);
+        graphics.drawString(this.font, label, -textWidth, -this.font.lineHeight, 0xFFFFFFFF, true);
+        graphics.pose().popPose();
     }
 
     private int substitutionToggleItemX() {
@@ -1424,27 +2484,22 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         return substitutionToggleItemX() + SUBSTITUTION_ICON_DST + 6;
     }
 
-    private double visibleLogicalMinX() {
-        return (-panX) / zoom - VISIBILITY_MARGIN;
-    }
-
-    private double visibleLogicalMaxX() {
-        return (this.width - panX) / zoom + VISIBILITY_MARGIN;
-    }
-
-    private double visibleLogicalMinY() {
-        return (-panY) / zoom - VISIBILITY_MARGIN;
-    }
-
-    private double visibleLogicalMaxY() {
-        return (this.height - panY) / zoom + VISIBILITY_MARGIN;
+    private void updateVisibleLogicalBounds(boolean clippedWorkspace) {
+        double screenLeft = clippedWorkspace ? canvasLeft() + 2.0D : 0.0D;
+        double screenTop = clippedWorkspace ? HEADER_HEIGHT + 2.0D : 0.0D;
+        double screenRight = clippedWorkspace ? canvasRight() - 2.0D : this.width;
+        double screenBottom = clippedWorkspace ? this.height - currentFooterHeight() - 2.0D : this.height;
+        visibleLogicalMinX = (screenLeft - panX) / zoom - VISIBILITY_MARGIN;
+        visibleLogicalMaxX = (screenRight - panX) / zoom + VISIBILITY_MARGIN;
+        visibleLogicalMinY = (screenTop - panY) / zoom - VISIBILITY_MARGIN;
+        visibleLogicalMaxY = (screenBottom - panY) / zoom + VISIBILITY_MARGIN;
     }
 
     private boolean isLogicalRectVisible(double left, double top, double right, double bottom) {
-        return right >= visibleLogicalMinX()
-                && left <= visibleLogicalMaxX()
-                && bottom >= visibleLogicalMinY()
-                && top <= visibleLogicalMaxY();
+        return right >= visibleLogicalMinX
+                && left <= visibleLogicalMaxX
+                && bottom >= visibleLogicalMinY
+                && top <= visibleLogicalMaxY;
     }
 
     private void renderPatternSubstitutionToggles(GuiGraphics graphics) {
@@ -1497,6 +2552,101 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         return null;
     }
 
+    private @Nullable List<Component> sidebarTooltipAt(double mouseX, double mouseY) {
+        if (isPointInsideButton(autoMergeButton, mouseX, mouseY)) {
+            return switchTooltip(autoMergeSameMaterials
+                    ? "gui.jeict.recipe_tree.overview_merge_enabled"
+                    : "gui.jeict.recipe_tree.overview_merge_disabled",
+                    "gui.jeict.recipe_tree.overview_merge_tooltip");
+        }
+        if (isPointInsideButton(computeQuantitiesButton, mouseX, mouseY)) {
+            return switchTooltip(computeRecipeQuantities
+                    ? "gui.jeict.recipe_tree.overview_quantity_compute_enabled"
+                    : "gui.jeict.recipe_tree.overview_quantity_compute_disabled",
+                    "gui.jeict.recipe_tree.overview_quantity_compute_tooltip");
+        }
+        if (isPointInsideButton(autoUniqueRecipeButton, mouseX, mouseY)) {
+            return switchTooltip(autoExpandUniqueEncodableRecipe
+                    ? "gui.jeict.recipe_tree.overview_auto_unique_enabled"
+                    : "gui.jeict.recipe_tree.overview_auto_unique_disabled",
+                    "gui.jeict.recipe_tree.overview_auto_unique_tooltip");
+        }
+        if (isPointInsideButton(memoryReadingButton, mouseX, mouseY)) {
+            return switchTooltip(readRememberedSelections
+                    ? "gui.jeict.recipe_tree.overview_memory_reading_enabled"
+                    : "gui.jeict.recipe_tree.overview_memory_reading_disabled",
+                    "gui.jeict.recipe_tree.overview_memory_reading_tooltip");
+        }
+        if (isPointInsideButton(toggleExistingPatternButton, mouseX, mouseY)) {
+            return switchTooltip(context.disableExistingPatternExpansion()
+                    ? "gui.jeict.recipe_tree.overview_toggle_existing_disabled"
+                    : "gui.jeict.recipe_tree.overview_toggle_existing_enabled",
+                    "gui.jeict.recipe_tree.overview_toggle_existing_tooltip");
+        }
+        if (isPointInsideButton(styleButton, mouseX, mouseY)) {
+            return List.of(RecipeTreeTheme.styleButtonMessage(),
+                    Component.translatable("gui.jeict.recipe_tree.overview_style_tooltip")
+                            .withStyle(ChatFormatting.GRAY));
+        }
+        return null;
+    }
+
+    private List<Component> switchTooltip(String stateKey, String descriptionKey) {
+        return List.of(Component.translatable(stateKey),
+                Component.translatable(descriptionKey).withStyle(ChatFormatting.GRAY));
+    }
+
+    private boolean renderSummaryMaterialTooltip(GuiGraphics graphics, double logicalMouseX, double logicalMouseY,
+            int mouseX, int mouseY) {
+        for (TopMaterialBounds bounds : topMaterialBounds) {
+            if (!bounds.contains(logicalMouseX, logicalMouseY) || bounds.material().alternatives().isEmpty()) {
+                continue;
+            }
+            ItemStack stack = bounds.material().alternatives().getFirst();
+            List<Component> lines = new ArrayList<>(Screen.getTooltipFromItem(Minecraft.getInstance(), stack));
+            if (computeRecipeQuantities) {
+                lines.add(Component.translatable("gui.jeict.recipe_tree.amount_exact", bounds.material().count())
+                        .withStyle(ChatFormatting.GRAY));
+            }
+            lines.add(Component.translatable("gui.jeict.recipe_tree.material_right_click_hint")
+                    .withStyle(ChatFormatting.GRAY));
+            if (cachedTopMaterialShowsPatternHint(bounds.material())) {
+                lines.add(Component.translatable("gui.jeict.recipe_tree.me_pattern_exists_hint").withStyle(ChatFormatting.RED));
+            }
+            graphics.renderTooltip(this.font, lines, Optional.empty(), mouseX, mouseY);
+            return true;
+        }
+        for (GenericTopMaterialBounds bounds : genericTopMaterialBounds) {
+            if (!bounds.contains(logicalMouseX, logicalMouseY)) {
+                continue;
+            }
+            MergedLeaf leaf = bounds.data().leaf();
+            List<Component> lines = new ArrayList<>(ingredientTooltipLines(leaf.ingredient()));
+            if (lines.isEmpty()) {
+                lines.add(Component.literal(leaf.title()));
+            }
+            if (computeRecipeQuantities && !bounds.data().label().isBlank()) {
+                lines.add(Component.literal(bounds.data().label()).withStyle(ChatFormatting.GRAY));
+            }
+            lines.add(Component.translatable("gui.jeict.recipe_tree.material_right_click_hint")
+                    .withStyle(ChatFormatting.GRAY));
+            graphics.renderTooltip(this.font, lines, Optional.empty(), mouseX, mouseY);
+            return true;
+        }
+        for (TopMaterialBounds bounds : surplusMaterialBounds) {
+            if (!bounds.contains(logicalMouseX, logicalMouseY) || bounds.material().alternatives().isEmpty()) {
+                continue;
+            }
+            ItemStack stack = bounds.material().alternatives().getFirst();
+            List<Component> lines = new ArrayList<>(Screen.getTooltipFromItem(Minecraft.getInstance(), stack));
+            lines.add(Component.translatable("gui.jeict.recipe_tree.surplus_amount", bounds.material().count())
+                    .withStyle(ChatFormatting.GRAY));
+            graphics.renderTooltip(this.font, lines, Optional.empty(), mouseX, mouseY);
+            return true;
+        }
+        return false;
+    }
+
     private void renderTooltip(GuiGraphics graphics, double logicalMouseX, double logicalMouseY, int mouseX, int mouseY) {
         if (pendingAlternativeSelection != null) {
             for (AlternativeOptionBounds option : alternativeOptionBounds) {
@@ -1509,6 +2659,17 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         List<Component> substitutionTooltip = patternSubstitutionTooltipAt(mouseX, mouseY);
         if (substitutionTooltip != null) {
             graphics.renderTooltip(this.font, substitutionTooltip, Optional.empty(), mouseX, mouseY);
+            return;
+        }
+        List<Component> sidebarTooltip = sidebarTooltipAt(mouseX, mouseY);
+        if (sidebarTooltip != null) {
+            graphics.renderTooltip(this.font, sidebarTooltip, Optional.empty(), mouseX, mouseY);
+            return;
+        }
+        if (isPointInsideBatchBadge(mouseX, mouseY)) {
+            graphics.renderTooltip(this.font,
+                    List.of(Component.translatable("gui.jeict.recipe_tree.batch_tooltip")),
+                    Optional.empty(), mouseX, mouseY);
             return;
         }
         if (autoMergeSameMaterials) {
@@ -1538,6 +2699,12 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                         Optional.empty(), mouseX, mouseY);
                 return;
             }
+            if (memoryReadingButton.visible && isPointInsideButton(memoryReadingButton, mouseX, mouseY)) {
+                graphics.renderTooltip(this.font,
+                        List.of(Component.translatable("gui.jeict.recipe_tree.overview_memory_reading_tooltip")),
+                        Optional.empty(), mouseX, mouseY);
+                return;
+            }
             if (computeQuantitiesButton.visible && isPointInsideButton(computeQuantitiesButton, mouseX, mouseY)) {
                 graphics.renderTooltip(this.font,
                         List.of(Component.translatable("gui.jeict.recipe_tree.overview_quantity_compute_tooltip")),
@@ -1548,6 +2715,17 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 graphics.renderTooltip(this.font,
                         List.of(Component.translatable("gui.jeict.recipe_tree.overview_style_tooltip")),
                         Optional.empty(), mouseX, mouseY);
+                return;
+            }
+            if (toggleExistingPatternButton.visible && isPointInsideButton(toggleExistingPatternButton, mouseX, mouseY)) {
+                graphics.renderTooltip(this.font,
+                        List.of(Component.translatable(context.disableExistingPatternExpansion()
+                                ? "gui.jeict.recipe_tree.overview_toggle_existing_disabled"
+                                : "gui.jeict.recipe_tree.overview_toggle_existing_enabled")),
+                        Optional.empty(), mouseX, mouseY);
+                return;
+            }
+            if (!isInsideWorkspace(mouseX, mouseY)) {
                 return;
             }
             for (AlternativeButtonBounds bounds : alternativeButtonBounds) {
@@ -1566,55 +2744,27 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             }
             for (LayerMaterialBounds bounds : layerMaterialBounds) {
                 if (bounds.contains(logicalMouseX, logicalMouseY)) {
-                    List<Component> lines = new ArrayList<>();
-                    lines.add(Component.literal(bounds.material().label()));
+                    List<Component> lines = new ArrayList<>(ingredientTooltipLines(bounds.material().ingredient()));
+                    if (lines.isEmpty()) {
+                        lines.add(Component.literal(bounds.material().label()));
+                    }
                     if (!bounds.material().amountLabel().isBlank()) {
                         lines.add(Component.literal(bounds.material().amountLabel()).withStyle(ChatFormatting.GRAY));
                     }
-                    MergedLeaf leafPreview = mergedLeafFromLayerMaterial(bounds.material());
                     if (bounds.material().showsPatternHint()) {
                         lines.add(Component.translatable("gui.jeict.recipe_tree.pattern_exists").withStyle(ChatFormatting.RED));
                     }
                     if (!bounds.material().recipeTargets().isEmpty()) {
                         RecipeTreeNodeViewModel node = bounds.material().recipeTargets().getFirst();
-                        if (!hasJeiRecipes(node)) {
-                            lines.add(Component.translatable("gui.jeict.recipe_tree.no_jei_recipe").withStyle(ChatFormatting.AQUA));
-                        }
                         if (node.recipe().subtitle() != null && !node.recipe().subtitle().getString().isBlank()) {
                             lines.add(node.recipe().subtitle().copy().withStyle(ChatFormatting.GRAY));
                         }
-                    } else if (leafPreview != null && !hasJeiRecipes(leafPreview)) {
-                        lines.add(Component.translatable("gui.jeict.recipe_tree.no_jei_recipe").withStyle(ChatFormatting.AQUA));
                     }
                     graphics.renderTooltip(this.font, lines, Optional.empty(), mouseX, mouseY);
                     return;
                 }
             }
-            for (TopMaterialBounds bounds : topMaterialBounds) {
-                if (!bounds.contains(logicalMouseX, logicalMouseY) || bounds.material().alternatives().isEmpty()) {
-                    continue;
-                }
-                ItemStack stack = bounds.material().alternatives().getFirst();
-                List<Component> lines = new ArrayList<>();
-                lines.add(stack.getHoverName());
-                if (computeRecipeQuantities) {
-                    lines.add(Component.translatable("gui.jeict.recipe_tree.amount_exact", bounds.material().count())
-                            .withStyle(ChatFormatting.GRAY));
-                }
-                lines.add(Component.translatable("gui.jeict.recipe_tree.material_right_click_hint")
-                        .withStyle(ChatFormatting.GRAY));
-                if (shouldShowTopMaterialPatternHint(bounds.material())) {
-                    lines.add(Component.translatable("gui.jeict.recipe_tree.me_pattern_exists_hint").withStyle(ChatFormatting.RED));
-                }
-                graphics.renderTooltip(this.font, lines, Optional.empty(), mouseX, mouseY);
-                return;
-            }
-            if (toggleExistingPatternButton.visible && isPointInsideButton(toggleExistingPatternButton, mouseX, mouseY)) {
-                graphics.renderTooltip(this.font,
-                        List.of(Component.literal(context.disableExistingPatternExpansion()
-                                ? Component.translatable("gui.jeict.recipe_tree.overview_toggle_existing_disabled").getString()
-                                : Component.translatable("gui.jeict.recipe_tree.overview_toggle_existing_enabled").getString())),
-                        Optional.empty(), mouseX, mouseY);
+            if (renderSummaryMaterialTooltip(graphics, logicalMouseX, logicalMouseY, mouseX, mouseY)) {
                 return;
             }
             return;
@@ -1659,10 +2809,13 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         }
         if (toggleExistingPatternButton.visible && isPointInsideButton(toggleExistingPatternButton, mouseX, mouseY)) {
             graphics.renderTooltip(this.font,
-                    List.of(Component.literal(context.disableExistingPatternExpansion()
-                            ? Component.translatable("gui.jeict.recipe_tree.overview_toggle_existing_disabled").getString()
-                            : Component.translatable("gui.jeict.recipe_tree.overview_toggle_existing_enabled").getString())),
+                    List.of(Component.translatable(context.disableExistingPatternExpansion()
+                            ? "gui.jeict.recipe_tree.overview_toggle_existing_disabled"
+                            : "gui.jeict.recipe_tree.overview_toggle_existing_enabled")),
                     Optional.empty(), mouseX, mouseY);
+            return;
+        }
+        if (!isInsideWorkspace(mouseX, mouseY)) {
             return;
         }
         for (AlternativeButtonBounds bounds : alternativeButtonBounds) {
@@ -1679,32 +2832,16 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                     Optional.empty(), mouseX, mouseY);
             return;
         }
-        for (TopMaterialBounds bounds : topMaterialBounds) {
-            if (!bounds.contains(logicalMouseX, logicalMouseY) || bounds.material().alternatives().isEmpty()) {
-                continue;
-            }
-            ItemStack stack = bounds.material().alternatives().get(0);
-            List<Component> lines = new ArrayList<>();
-            lines.add(stack.getHoverName());
-            if (computeRecipeQuantities) {
-                lines.add(Component.translatable("gui.jeict.recipe_tree.amount_exact", bounds.material().count())
-                        .withStyle(ChatFormatting.GRAY));
-            }
-            lines.add(Component.translatable("gui.jeict.recipe_tree.material_right_click_hint")
-                    .withStyle(ChatFormatting.GRAY));
-            if (shouldShowTopMaterialPatternHint(bounds.material())) {
-                lines.add(Component.translatable("gui.jeict.recipe_tree.me_pattern_exists_hint").withStyle(ChatFormatting.RED));
-            }
-            graphics.renderTooltip(this.font, lines, Optional.empty(), mouseX, mouseY);
+        if (renderSummaryMaterialTooltip(graphics, logicalMouseX, logicalMouseY, mouseX, mouseY)) {
             return;
         }
 
-        for (PositionedNode node : positionedNodes) {
+        for (PositionedNode node : visiblePositionedNodes) {
             int x = node.x();
             int y = node.y();
             int width = node.graph().width();
-            int collapseX = x + width + 2;
-            int collapseY = y + 8;
+            int collapseX = x + width - NODE_PART_PADDING - 10;
+            int collapseY = y + 9;
             if (showsCollapseButton(node)
                     && logicalMouseX >= collapseX && logicalMouseX <= collapseX + 10
                     && logicalMouseY >= collapseY && logicalMouseY <= collapseY + 10) {
@@ -1716,17 +2853,16 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             if (logicalMouseX < x || logicalMouseX > x + width || logicalMouseY < y || logicalMouseY > y + NODE_HEIGHT) {
                 continue;
             }
-            if (node.graph().mergedLeaf() != null && shouldShowMeExistingPatternHints()
-                    && shouldBlockExpansion(node.graph().mergedLeaf())) {
+            if (node.graph().showsPatternHint()) {
                 graphics.renderTooltip(this.font,
                         List.of(Component.translatable("gui.jeict.recipe_tree.pattern_exists").withStyle(ChatFormatting.RED)),
                         Optional.empty(), mouseX, mouseY);
                 return;
             }
-            int machineX = x + width - MACHINE_SLOT_SIZE - 3;
+            int machineX = x + NODE_MAIN_SIZE + NODE_PART_GAP;
             if (node.graph().machineIcon() != null
                     && logicalMouseX >= machineX && logicalMouseX <= machineX + MACHINE_SLOT_SIZE
-                    && logicalMouseY >= y + 4 && logicalMouseY <= y + 4 + MACHINE_SLOT_SIZE) {
+                    && logicalMouseY >= y + 5 && logicalMouseY <= y + 5 + MACHINE_SLOT_SIZE) {
                 List<Component> lines = new ArrayList<>();
                 lines.add(node.graph().titleComponent());
                 if (node.graph().machineName() != null && !node.graph().machineName().getString().isBlank()) {
@@ -1736,15 +2872,12 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 return;
             }
             if (logicalMouseX >= x + 2 && logicalMouseX <= x + 22) {
-                List<Component> lines = new ArrayList<>();
-                lines.add(node.graph().titleComponent());
+                List<Component> lines = new ArrayList<>(ingredientTooltipLines(node.graph().ingredient()));
+                if (lines.isEmpty()) {
+                    lines.add(node.graph().titleComponent());
+                }
                 if (!node.graph().exactAmount().isBlank()) {
                     lines.add(Component.literal(node.graph().exactAmount()).withStyle(ChatFormatting.GRAY));
-                }
-                if (node.graph().recipeNode() != null && !hasJeiRecipes(node.graph().recipeNode())) {
-                    lines.add(Component.translatable("gui.jeict.recipe_tree.no_jei_recipe").withStyle(ChatFormatting.AQUA));
-                } else if (node.graph().mergedLeaf() != null && !hasJeiRecipes(node.graph().mergedLeaf())) {
-                    lines.add(Component.translatable("gui.jeict.recipe_tree.no_jei_recipe").withStyle(ChatFormatting.AQUA));
                 }
                 if (node.graph().recipeNode() != null && node.graph().machineName() != null
                         && !node.graph().machineName().getString().isBlank()) {
@@ -1758,16 +2891,39 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (button == 0 && isPointInsideBatchBadge(mouseX, mouseY)) {
+            return true;
+        }
         if (button == 0 && handlePatternSubstitutionToggleClick(mouseX, mouseY)) {
             return true;
         }
+        boolean insideWorkspace = isInsideWorkspace(mouseX, mouseY);
         double logicalMouseXForPin = (mouseX - panX) / zoom;
         double logicalMouseYForPin = (mouseY - panY) / zoom;
-        if (button == 0 && topMaterialsPinButtonBounds != null
+        if (insideWorkspace && button == 0 && topMaterialsPinButtonBounds != null
                 && topMaterialsPinButtonBounds.contains(logicalMouseXForPin, logicalMouseYForPin)) {
             FloatingMaterialOverlayState.set(createFloatingMaterialSnapshot());
             this.onClose();
             return true;
+        }
+        if (insideWorkspace && button == 0) {
+            for (AlternativeButtonBounds bounds : alternativeButtonBounds) {
+                if (bounds.contains(logicalMouseXForPin, logicalMouseYForPin)) {
+                    openAlternativeSelection(bounds);
+                    return true;
+                }
+            }
+        }
+        if (insideWorkspace && (button == 0 || button == 1)) {
+            GenericTopMaterialBounds genericTarget = findGenericTopMaterialAt(logicalMouseXForPin, logicalMouseYForPin);
+            if (genericTarget != null) {
+                if (button == 0) {
+                    openSelectionWithJei(genericTarget.data().leaf());
+                } else {
+                    jumpToMaterialSignature(signatureOf(genericTarget.data().leaf().representative()));
+                }
+                return true;
+            }
         }
         if (autoMergeSameMaterials) {
             if (pendingAlternativeSelection != null) {
@@ -1778,6 +2934,9 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                     }
                 }
                 pendingAlternativeSelection = null;
+            }
+            if (!insideWorkspace) {
+                return super.mouseClicked(mouseX, mouseY, button);
             }
             double logicalMouseX = (mouseX - panX) / zoom;
             double logicalMouseY = (mouseY - panY) / zoom;
@@ -1807,8 +2966,19 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 }
             }
             LayerMaterialBounds clicked = findLayerAt(logicalMouseX, logicalMouseY);
-            if (clicked != null && handleMergedLayerMaterialClick(clicked.material())) {
-                return true;
+            if (clicked != null) {
+                if (button == 0) {
+                    selectedLayerMaterial = clicked.material();
+                    selectedNode = null;
+                    ensureLogicalRectVisible(clicked.x(), clicked.y(), clicked.width(), clicked.height());
+                    return true;
+                }
+                if (button == 1 && handleMergedLayerMaterialClick(clicked.material())) {
+                    return true;
+                }
+            }
+            if (button == 0) {
+                selectedLayerMaterial = null;
             }
             return super.mouseClicked(mouseX, mouseY, button);
         }
@@ -1820,6 +2990,9 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 }
             }
             pendingAlternativeSelection = null;
+        }
+        if (!insideWorkspace) {
+            return super.mouseClicked(mouseX, mouseY, button);
         }
         if (button == 1) {
             double logicalMouseX = (mouseX - panX) / zoom;
@@ -1864,27 +3037,45 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             }
             PositionedNode clicked = findNodeAt(logicalMouseX, logicalMouseY);
             if (clicked != null) {
+                if (button == 0) {
+                    selectedNode = clicked;
+                    selectedLayerMaterial = null;
+                    ensureLogicalRectVisible(clicked.x(), clicked.y(), clicked.graph().width(), NODE_HEIGHT);
+                    return true;
+                }
                 if (clicked.graph().recipeNode() != null) {
                     openSelectionWithJei(clicked.graph().recipeNode());
                     return true;
                 }
                 if (clicked.graph().mergedLeaf() != null) {
-                    if (shouldBlockExpansion(clicked.graph().mergedLeaf())) {
+                    if (clicked.graph().showsPatternHint()) {
                         return true;
                     }
                     openSelectionWithJei(clicked.graph().mergedLeaf());
                     return true;
                 }
             }
+            if (button == 0) {
+                selectedNode = null;
+            }
         }
         return super.mouseClicked(mouseX, mouseY, button);
     }
 
     private @Nullable PositionedNode findNodeAt(double logicalMouseX, double logicalMouseY) {
-        for (PositionedNode node : positionedNodes) {
+        for (PositionedNode node : visiblePositionedNodes) {
             if (logicalMouseX >= node.x() && logicalMouseX <= node.x() + node.graph().width()
                     && logicalMouseY >= node.y() && logicalMouseY <= node.y() + NODE_HEIGHT) {
                 return node;
+            }
+        }
+        return null;
+    }
+
+    private @Nullable GenericTopMaterialBounds findGenericTopMaterialAt(double logicalMouseX, double logicalMouseY) {
+        for (GenericTopMaterialBounds bounds : genericTopMaterialBounds) {
+            if (bounds.contains(logicalMouseX, logicalMouseY)) {
+                return bounds;
             }
         }
         return null;
@@ -1900,60 +3091,35 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     private @Nullable MergedLeaf findLeafForMaterial(RequestedIngredient material) {
-        String targetSignature = signatureOf(material);
-        for (PositionedNode node : positionedNodes) {
-            MergedLeaf leaf = node.graph().mergedLeaf();
-            if (leaf != null && signatureOf(leaf.representative().requestedIngredient()).equals(targetSignature)) {
-                return leaf;
-            }
-        }
-        return findLeafForMaterial(context.root(), targetSignature);
-    }
-
-    private @Nullable MergedLeaf findLeafForMaterial(RecipeTreeNodeViewModel node, String targetSignature) {
-        List<RecipeTreeInputViewModel> matches = new ArrayList<>();
-        RecipeTreeNodeViewModel parent = collectLeafInputsBySignature(node, targetSignature, matches);
-        if (parent == null || matches.isEmpty()) {
+        List<UnresolvedInputSlot> matches = collectUnresolvedInputsForMaterial(material);
+        if (matches.isEmpty()) {
             return null;
         }
-        RecipeTreeInputViewModel representative = matches.getFirst();
+        RecipeTreeInputViewModel representative = matches.getFirst().input();
+        List<RecipeTreeInputViewModel> members = new ArrayList<>(matches.size());
+        List<RecipeTreeNodeViewModel> parents = new ArrayList<>(matches.size());
         int totalAmount = 0;
-        for (RecipeTreeInputViewModel match : matches) {
-            totalAmount = safeAdd(totalAmount, Math.max(1, match.amount()));
+        for (UnresolvedInputSlot match : matches) {
+            members.add(match.input());
+            parents.add(match.parentNode());
+            totalAmount = safeAdd(totalAmount, Math.max(1, match.input().amount()));
         }
-        return new MergedLeaf(representative.displayIngredient(), displayNameOf(representative), totalAmount,
-                representative.amountText(), parent, List.copyOf(matches), List.of());
+        return new MergedLeaf(resolveGroupIngredient(members), displayNameOf(representative), totalAmount,
+                representative.amountText(), matches.getFirst().parentNode(), List.copyOf(members), List.copyOf(parents));
     }
 
-    private @Nullable RecipeTreeNodeViewModel collectLeafInputsBySignature(RecipeTreeNodeViewModel node, String targetSignature,
-            List<RecipeTreeInputViewModel> matches) {
-        RecipeTreeNodeViewModel matchedParent = null;
-        for (RecipeTreeInputViewModel input : node.recipe().inputs()) {
-            RecipeTreeNodeViewModel child = input.child();
-            if (child == null) {
-                if (signatureOf(input).equals(targetSignature)) {
-                    matches.add(input);
-                    if (matchedParent == null) {
-                        matchedParent = node;
-                    }
-                }
-                continue;
-            }
-            RecipeTreeNodeViewModel childParent = collectLeafInputsBySignature(child, targetSignature, matches);
-            if (matchedParent == null) {
-                matchedParent = childParent;
-            }
-        }
-        return matchedParent;
+    private List<UnresolvedInputSlot> collectUnresolvedInputsForMaterial(RequestedIngredient material) {
+        List<UnresolvedInputSlot> indexed = unresolvedInputsBySignature.get(signatureOf(material));
+        return indexed == null ? List.of() : indexed;
     }
 
     private @Nullable PositionedNode findCollapseButtonAt(double logicalMouseX, double logicalMouseY) {
-        for (PositionedNode node : positionedNodes) {
+        for (PositionedNode node : visiblePositionedNodes) {
             if (!showsCollapseButton(node)) {
                 continue;
             }
-            int x = node.x() + node.graph().width() + 2;
-            int y = node.y() + 8;
+            int x = node.x() + node.graph().width() - NODE_PART_PADDING - 10;
+            int y = node.y() + 9;
             if (logicalMouseX >= x && logicalMouseX <= x + 10
                     && logicalMouseY >= y && logicalMouseY <= y + 10) {
                 return node;
@@ -1974,26 +3140,10 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (autoMergeSameMaterials) {
-            if (Screen.hasControlDown()) {
-                double oldZoom = zoom;
-                zoom = Math.max(0.2, Math.min(4.0, zoom + scrollY * 0.1));
-                double logicalX = (mouseX - panX) / oldZoom;
-                double logicalY = (mouseY - panY) / oldZoom;
-                panX = mouseX - logicalX * zoom;
-                panY = mouseY - logicalY * zoom;
-                return true;
-            }
-            if (pendingAlternativeSelection != null && isInsideAlternativeViewport(mouseX, mouseY)
-                    && getAlternativeOptionCount() > getAlternativeVisibleCount()) {
-                alternativeScroll -= (int) Math.signum(scrollY);
-                clampAlternativeScroll();
-                return true;
-            }
-            if (Screen.hasShiftDown()) {
-                panX += scrollY * 18;
-            } else {
-                panY += scrollY * 18;
+        if (isPointInsideBatchBadge(mouseX, mouseY)) {
+            int direction = (int) Math.signum(scrollY);
+            if (direction != 0) {
+                adjustBatchCount(direction * (Screen.hasShiftDown() ? 10 : 1));
             }
             return true;
         }
@@ -2003,26 +3153,25 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             clampAlternativeScroll();
             return true;
         }
-        if (Screen.hasControlDown()) {
-            double oldZoom = zoom;
-            zoom = Math.max(0.2, Math.min(4.0, zoom + scrollY * 0.1));
-            double logicalX = (mouseX - panX) / oldZoom;
-            double logicalY = (mouseY - panY) / oldZoom;
-            panX = mouseX - logicalX * zoom;
-            panY = mouseY - logicalY * zoom;
-            return true;
+        if (!isInsideWorkspace(mouseX, mouseY)) {
+            return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
         }
         if (Screen.hasShiftDown()) {
-            panX += scrollY * 18;
-        } else {
-            panY += scrollY * 18;
+            panX += scrollY * 20.0D;
+            return true;
         }
+        zoomAt(mouseX, mouseY, scrollY * 0.1D);
         return true;
     }
 
     @Override
+    public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        return super.mouseReleased(mouseX, mouseY, button);
+    }
+
+    @Override
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
-        if (button == 0) {
+        if (button == 0 && isInsideWorkspace(mouseX, mouseY)) {
             panX += dragX;
             panY += dragY;
             return true;
@@ -2039,7 +3188,23 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     public void onClose() {
         pendingJeiSelection = null;
         pendingAlternativeSelection = null;
+        RecipeTreeClientMemory.flushPendingSave();
         this.minecraft.setScreen(returnScreen);
+    }
+
+    private void rememberSelectionForNode(RecipeTreeNodeViewModel targetNode, RecipeTreeRecipeViewModel selected) {
+        RecipeTreeNodeViewModel parent = targetNode.parent();
+        if (parent == null) {
+            return;
+        }
+        for (RecipeTreeInputViewModel input : parent.recipe().inputs()) {
+            if (input.child() != targetNode) {
+                continue;
+            }
+            String signature = signatureOf(input);
+            forgetManualCollapse(signature);
+            context.rememberSelection(signature, selected);
+        }
     }
 
     private boolean containsRecipeInAncestors(@Nullable RecipeTreeNodeViewModel node, RecipeTreeRecipeViewModel candidate) {
@@ -2062,9 +3227,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 return;
             }
         }
+        Map<String, Optional<RecipeTreeRecipeViewModel>> rememberedCache = new HashMap<>();
         for (RecipeTreeNodeViewModel targetNode : batch) {
+            rememberSelectionForNode(targetNode, selected);
             targetNode.setRecipe(selected);
-            autoApplyRememberedChildren(targetNode);
+            autoApplyRememberedChildren(targetNode, rememberedCache);
         }
         pendingJeiSelection = null;
     }
@@ -2080,6 +3247,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 }
                 return;
             }
+            rememberSelectionForNode(targetNode, selected);
             targetNode.setRecipe(selected);
             autoApplyRememberedChildren(targetNode);
         } else if (targetLeaf != null) {
@@ -2216,7 +3384,19 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     private void applyLeafSelection(MergedLeaf target, RecipeTreeRecipeViewModel selected) {
-        context.rememberSelection(signatureOf(target.representative()), selected);
+        applyLeafSelection(target, selected, new HashMap<>());
+    }
+
+    private void applyLeafSelection(MergedLeaf target, RecipeTreeRecipeViewModel selected,
+            Map<String, Optional<RecipeTreeRecipeViewModel>> rememberedCache) {
+        Set<String> rememberedSignatures = new HashSet<>();
+        for (RecipeTreeInputViewModel input : target.members()) {
+            String signature = signatureOf(input);
+            if (rememberedSignatures.add(signature)) {
+                forgetManualCollapse(signature);
+                context.rememberSelection(signature, selected);
+            }
+        }
         Map<RecipeTreeNodeViewModel, List<RecipeTreeInputViewModel>> byParent = new LinkedHashMap<>();
         for (int i = 0; i < target.members().size(); i++) {
             RecipeTreeInputViewModel input = target.members().get(i);
@@ -2228,54 +3408,139 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             for (RecipeTreeInputViewModel input : entry.getValue()) {
                 input.setChild(childNode);
             }
-            autoApplyRememberedChildren(childNode);
+            autoApplyRememberedChildren(childNode, rememberedCache);
         }
     }
 
     private void autoApplyRememberedChildren(RecipeTreeNodeViewModel parent) {
+        autoApplyRememberedChildren(parent, new HashMap<>());
+    }
+
+    private void autoApplyRememberedChildren(RecipeTreeNodeViewModel parent,
+            Map<String, Optional<RecipeTreeRecipeViewModel>> rememberedCache) {
+        if (!readRememberedSelections) {
+            return;
+        }
+        Set<RecipeTreeNodeViewModel> visited = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+        autoApplyRememberedChildren(parent, visited, rememberedCache);
+    }
+
+    private void autoApplyRememberedChildren(RecipeTreeNodeViewModel parent,
+            Set<RecipeTreeNodeViewModel> visited,
+            Map<String, Optional<RecipeTreeRecipeViewModel>> rememberedCache) {
+        if (!visited.add(parent)) {
+            return;
+        }
+        List<RecipeTreeNodeViewModel> childrenToVisit = new ArrayList<>();
+        Set<RecipeTreeNodeViewModel> queuedChildren = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+        Map<String, RecipeTreeNodeViewModel> rememberedChildrenBySignature = new HashMap<>();
+        Map<String, RecipeTreeNodeViewModel> expandedChildrenBySignature = new HashMap<>();
         for (RecipeTreeInputViewModel input : parent.recipe().inputs()) {
-            if (input.child() != null) {
-                continue;
-            }
             String signature = signatureOf(input);
-            RecipeTreeRecipeViewModel remembered = context.getRememberedSelection(signature);
-            if (remembered == null || parent.containsRecipe(remembered)) {
-                continue;
+            RecipeTreeNodeViewModel child = input.child();
+            if (child != null) {
+                RecipeTreeNodeViewModel canonical = expandedChildrenBySignature.get(signature);
+                if (canonical != null && canonical.recipe().sameRecipeAs(child.recipe())) {
+                    input.setChild(canonical);
+                    child = canonical;
+                } else {
+                    expandedChildrenBySignature.putIfAbsent(signature, child);
+                }
+            } else if (!isManuallyCollapsed(signature)) {
+                RecipeTreeRecipeViewModel remembered = rememberedCache
+                        .computeIfAbsent(signature,
+                                key -> Optional.ofNullable(context.getRememberedSelection(key, input.displayIngredient())))
+                        .orElse(null);
+                if (remembered != null && !parent.containsRecipe(remembered)) {
+                    RecipeTreeNodeViewModel existing = expandedChildrenBySignature.get(signature);
+                    if (existing != null && existing.recipe().sameRecipeAs(remembered)) {
+                        child = existing;
+                    } else {
+                        child = rememberedChildrenBySignature.computeIfAbsent(signature,
+                                ignored -> new RecipeTreeNodeViewModel(remembered, parent));
+                        expandedChildrenBySignature.putIfAbsent(signature, child);
+                    }
+                    input.setChild(child);
+                }
             }
-            input.setChild(new RecipeTreeNodeViewModel(remembered, parent));
+            if (child != null && queuedChildren.add(child)) {
+                childrenToVisit.add(child);
+            }
+        }
+        for (RecipeTreeNodeViewModel child : childrenToVisit) {
+            autoApplyRememberedChildren(child, visited, rememberedCache);
         }
     }
 
-    private String signatureOf(RecipeTreeInputViewModel input) {
-        var requested = input.requestedIngredientView();
-        if (requested != null && !requested.alternatives().isEmpty()) {
-            String signature = input.requestedIngredientSignature();
-            if (signature != null && !signature.isBlank()) {
-                return signature;
+    private boolean hasManuallyCollapsedInput(MergedLeaf leaf) {
+        for (RecipeTreeInputViewModel input : leaf.members()) {
+            if (isManuallyCollapsed(signatureOf(input))) {
+                return true;
             }
-            return signatureOf(requested);
         }
-        ItemStack stack = input.displayStack();
-        if (!stack.isEmpty()) {
-            return signatureOfItemType(stack);
+        return false;
+    }
+
+    private boolean isManuallyCollapsed(String signature) {
+        return manuallyCollapsedSignatures.contains(signature) || context.isCollapsed(signature);
+    }
+
+    private void rememberManualCollapse(String signature) {
+        manuallyCollapsedSignatures.add(signature);
+        context.rememberCollapsed(signature);
+    }
+
+    private void forgetManualCollapse(String signature) {
+        manuallyCollapsedSignatures.remove(signature);
+        context.forgetCollapsed(signature);
+    }
+
+    private String signatureOf(RecipeTreeInputViewModel input) {
+        int alternativeIndex = input.selectedAlternativeIndex();
+        CachedInputSignature cached = inputSignatureCache.get(input);
+        if (cached != null && cached.alternativeIndex() == alternativeIndex) {
+            return cached.signature();
         }
-        ITypedIngredient<?> ingredient = input.displayIngredient();
-        if (ingredient != null) {
-            return signatureOfMaterialIngredient(ingredient);
+        String signature;
+        RequestedIngredient requested = input.requestedIngredientView();
+        if (requested != null && !requested.alternatives().isEmpty()) {
+            signature = input.requestedIngredientSignature();
+            if (signature == null || signature.isBlank()) {
+                signature = signatureOf(requested);
+            }
+        } else {
+            ItemStack stack = input.displayStack();
+            ITypedIngredient<?> ingredient = input.displayIngredient();
+            if (!stack.isEmpty()) {
+                signature = signatureOfItemType(stack);
+            } else if (ingredient != null) {
+                signature = signatureOfMaterialIngredient(ingredient);
+            } else {
+                signature = "name#" + displayNameOf(input);
+            }
         }
-        return "name#" + displayNameOf(input);
+        inputSignatureCache.put(input, new CachedInputSignature(alternativeIndex, signature));
+        return signature;
     }
 
     private String signatureOf(ITypedIngredient<?> ingredient) {
         if (ingredient == null) {
             return "null";
         }
-        IIngredientManager ingredientManager = getIngredientManager();
-        if (ingredientManager != null) {
-            return signatureOfTypedIngredient(ingredientManager, ingredient);
+        String cached = typedIngredientSignatureCache.get(ingredient);
+        if (cached != null) {
+            return cached;
         }
-        Object raw = ingredient.getIngredient();
-        return "typed#" + raw.getClass().getName() + "#" + raw;
+        IIngredientManager ingredientManager = getIngredientManager();
+        String signature;
+        if (ingredientManager != null) {
+            signature = signatureOfTypedIngredient(ingredientManager, ingredient);
+        } else {
+            Object raw = ingredient.getIngredient();
+            signature = "typed#" + raw.getClass().getName() + "#" + raw;
+        }
+        typedIngredientSignatureCache.put(ingredient, signature);
+        return signature;
     }
 
     private String signatureOf(RecipeTreeNodeViewModel node) {
@@ -2315,29 +3580,52 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
 
     private void collapseNode(PositionedNode positionedNode) {
         RecipeTreeNodeViewModel node = positionedNode.graph().recipeNode();
-        if (node == null || node.parent() == null) {
+        RecipeTreeNodeViewModel parent = node == null ? null : node.parent();
+        if (parent == null) {
             return;
         }
-        collapseNodesMatchingSignature(context.root(), signatureOf(node));
+        for (RecipeTreeInputViewModel input : parent.recipe().inputs()) {
+            if (input.child() != node) {
+                continue;
+            }
+            String signature = signatureOf(input);
+            rememberManualCollapse(signature);
+            collapseExpandedInputsBySignature(signature);
+            return;
+        }
     }
 
-    private void collapseNodesMatchingSignature(RecipeTreeNodeViewModel parent, String targetSignature) {
-        for (RecipeTreeInputViewModel input : parent.recipe().inputs()) {
-            RecipeTreeNodeViewModel child = input.child();
-            if (child == null) {
+    private void collapseExpandedInputsBySignature(String targetSignature) {
+        if (targetSignature == null || targetSignature.isBlank()) {
+            return;
+        }
+        ArrayDeque<RecipeTreeNodeViewModel> pending = new ArrayDeque<>();
+        Set<RecipeTreeNodeViewModel> visited = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+        pending.addLast(context.root());
+        while (!pending.isEmpty()) {
+            RecipeTreeNodeViewModel node = pending.removeLast();
+            if (!visited.add(node)) {
                 continue;
             }
-            if (signatureOf(child).equals(targetSignature)) {
-                context.forgetSelection(signatureOf(input));
-                input.setChild(null);
-                continue;
+            for (RecipeTreeInputViewModel input : node.recipe().inputs()) {
+                RecipeTreeNodeViewModel child = input.child();
+                if (child == null) {
+                    continue;
+                }
+                if (targetSignature.equals(signatureOf(input))) {
+                    input.setChild(null);
+                } else {
+                    pending.addLast(child);
+                }
             }
-            collapseNodesMatchingSignature(child, targetSignature);
         }
     }
 
     private void jumpToMaterial(RequestedIngredient material) {
-        String targetSignature = signatureOf(material);
+        jumpToMaterialSignature(signatureOf(material));
+    }
+
+    private void jumpToMaterialSignature(String targetSignature) {
         if (autoMergeSameMaterials) {
             jumpToMaterialMergedLayers(targetSignature);
             return;
@@ -2402,57 +3690,37 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         if (backend == null || !backend.supportsExistingPatternHints()) {
             return false;
         }
-        RecipeTreeInputViewModel rep = leaf.representative();
-        ITypedIngredient<?> disp = rep.displayIngredient();
-        if (disp != null) {
-            return backend.isCraftable(disp.getIngredient());
-        }
-        return hasExistingPatternForRequestedIngredient(rep.requestedIngredient());
-    }
-
-    private boolean hasJeiRecipes(RecipeTreeNodeViewModel node) {
-        ITypedIngredient<?> ingredient = node.recipe().primaryOutputIngredient();
-        return ingredient != null && !RecipeTreeJeiLookup.findRecipesByOutput(ingredient).isEmpty();
-    }
-
-    private boolean hasJeiRecipes(MergedLeaf leaf) {
-        ITypedIngredient<?> ingredient = getJeiSelectionIngredient(leaf.representative());
-        return ingredient != null && !RecipeTreeJeiLookup.findRecipesByOutput(ingredient).isEmpty();
-    }
-
-    private List<RecipeTreeInputViewModel> collectUnresolvedInputsBySignature(RecipeTreeNodeViewModel node, String targetSignature) {
-        List<RecipeTreeInputViewModel> matches = new ArrayList<>();
-        collectUnresolvedInputsBySignature(node, targetSignature, matches);
-        return matches;
-    }
-
-    private void collectUnresolvedInputsBySignature(RecipeTreeNodeViewModel node, String targetSignature, List<RecipeTreeInputViewModel> matches) {
-        for (RecipeTreeInputViewModel input : node.recipe().inputs()) {
-            RecipeTreeNodeViewModel child = input.child();
-            if (child == null) {
-                if (signatureOf(input).equals(targetSignature)) {
-                    matches.add(input);
-                }
-                continue;
+        RecipeTreeInputViewModel representative = leaf.representative();
+        String signature = signatureOf(representative);
+        return existingPatternMaterialCache.computeIfAbsent(signature, ignored -> {
+            ITypedIngredient<?> displayed = representative.displayIngredient();
+            if (displayed != null) {
+                return backend.isCraftable(displayed.getIngredient());
             }
-            collectUnresolvedInputsBySignature(child, targetSignature, matches);
-        }
+            return queryExistingPatternForRequestedIngredient(backend, representative.requestedIngredient());
+        });
     }
 
     /** 仅检查首个非空备选，避免 tag 膨胀时造成查询风暴（与 JEI「当前展示」语义一致）。 */
     private boolean hasExistingPatternForRequestedIngredient(@Nullable RequestedIngredient ingredient) {
         CraftingTreeBackend backend = CraftingTreeBackends.get();
-        if (backend == null || !backend.supportsExistingPatternHints()) {
+        if (backend == null || !backend.supportsExistingPatternHints() || ingredient == null) {
             return false;
         }
+        String signature = signatureOf(ingredient);
+        return existingPatternMaterialCache.computeIfAbsent(signature,
+                ignored -> queryExistingPatternForRequestedIngredient(backend, ingredient));
+    }
+
+    private boolean queryExistingPatternForRequestedIngredient(CraftingTreeBackend backend,
+            @Nullable RequestedIngredient ingredient) {
         if (ingredient == null) {
             return false;
         }
         for (ItemStack alternative : ingredient.alternatives()) {
-            if (alternative.isEmpty()) {
-                continue;
+            if (!alternative.isEmpty()) {
+                return backend.isCraftable(alternative);
             }
-            return backend.isCraftable(alternative);
         }
         return false;
     }
@@ -2487,42 +3755,90 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
 
     private void updateSelectionButtons() {
         CraftingTreeBackend backend = CraftingTreeBackends.get();
+        backButton.visible = true;
+        backButton.active = true;
+        zoomOutButton.visible = true;
+        zoomOutButton.active = zoom > 0.2D;
+        zoomInButton.visible = true;
+        zoomInButton.active = zoom < 4.0D;
+        fitViewButton.visible = true;
+        fitViewButton.active = true;
+        settingsButton.visible = true;
+        settingsButton.active = true;
+
         computeQuantitiesButton.visible = true;
         computeQuantitiesButton.active = true;
-        toggleExistingPatternButton.visible = backend != null && backend.supportsExistingPatternHints();
-        toggleExistingPatternButton.active = toggleExistingPatternButton.visible;
         autoUniqueRecipeButton.visible = true;
         autoUniqueRecipeButton.active = true;
+        memoryReadingButton.visible = true;
+        memoryReadingButton.active = true;
         autoMergeButton.visible = true;
         autoMergeButton.active = true;
         styleButton.visible = true;
         styleButton.active = true;
+        toggleExistingPatternButton.visible = backend != null && backend.supportsExistingPatternHints();
+        toggleExistingPatternButton.active = toggleExistingPatternButton.visible;
+
+        int settingsX = 8;
+        int settingsWidth = settingsOpen ? SETTINGS_WIDTH - 14 : 24;
+        Button[] settingsButtons = {
+                autoMergeButton, computeQuantitiesButton, autoUniqueRecipeButton, memoryReadingButton,
+                toggleExistingPatternButton, styleButton
+        };
+        settingsButton.setX(settingsX);
+        settingsButton.setY(HEADER_HEIGHT + 8);
+        settingsButton.setWidth(24);
+        settingsButton.setHeight(24);
+        settingsButton.setMessage(Component.empty());
+        int settingsY = HEADER_HEIGHT + 36;
+        for (Button button : settingsButtons) {
+            if (!button.visible) {
+                continue;
+            }
+            button.setX(settingsX);
+            button.setY(settingsY);
+            button.setWidth(settingsWidth);
+            button.setHeight(24);
+            settingsY += 28;
+        }
+
+        fitViewButton.setX(this.width - 54);
+        fitViewButton.setY(8);
+        fitViewButton.setWidth(42);
+        fitViewButton.setHeight(20);
+        zoomInButton.setX(this.width - 80);
+        zoomInButton.setY(8);
+        zoomInButton.setWidth(22);
+        zoomInButton.setHeight(20);
+        zoomOutButton.setX(this.width - 154);
+        zoomOutButton.setY(8);
+        zoomOutButton.setWidth(22);
+        zoomOutButton.setHeight(20);
+        toolbarLeft = this.width - 160;
+
         encodeButton.visible = backend != null && backend.supportsEncode();
         encodeButton.active = encodeButton.visible;
         uploadButton.visible = backend != null;
         uploadButton.active = backend != null && backend.supportsUpload();
-        backButton.visible = true;
-        backButton.active = true;
-        backButton.setX(this.width - 68);
-        backButton.setY(10);
-        computeQuantitiesButton.setX(this.width - 356);
-        computeQuantitiesButton.setY(10);
-        styleButton.setX(this.width - 428);
-        styleButton.setY(10);
-        toggleExistingPatternButton.setX(this.width - 212);
-        toggleExistingPatternButton.setY(10);
-        autoUniqueRecipeButton.setX(this.width - 284);
-        autoUniqueRecipeButton.setY(10);
-        autoMergeButton.setX(this.width - 140);
-        autoMergeButton.setY(10);
-        encodeButton.setX(this.width / 2 - 62);
-        encodeButton.setY(this.height - 26);
-        uploadButton.setX(this.width / 2 + 4);
-        uploadButton.setY(this.height - 26);
+        encodeButton.setWidth(Math.max(72, this.font.width(encodeButton.getMessage()) + 14));
+        uploadButton.setWidth(Math.max(54, this.font.width(uploadButton.getMessage()) + 14));
+        encodeButton.setHeight(20);
+        uploadButton.setHeight(20);
+        int actionsRight = this.width - 10;
+        if (uploadButton.visible) {
+            uploadButton.setX(actionsRight - uploadButton.getWidth());
+            uploadButton.setY(this.height - 27);
+            actionsRight = uploadButton.getX() - 5;
+        }
+        if (encodeButton.visible) {
+            encodeButton.setX(actionsRight - encodeButton.getWidth());
+            encodeButton.setY(this.height - 27);
+        }
         syncComputeQuantitiesButton();
         syncStyleButton();
         syncToggleExistingPatternButton();
         syncAutoUniqueRecipeButton();
+        syncMemoryReadingButton();
         syncAutoMergeButton();
     }
 
@@ -2544,8 +3860,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         int panelX = Math.max(6, Math.min(this.width - panelWidth - 6, pendingAlternativeSelection.anchorX() + 12));
         int panelY = Math.max(6, Math.min(this.height - panelHeight - 6, pendingAlternativeSelection.anchorY() - 4));
         RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
-        fillFramedPanel(graphics, panelX, panelY, panelX + panelWidth, panelY + panelHeight,
-                theme.panelBorder(), theme.panelMiddle(), theme.panelInner());
+        RecipeTreeTheme.drawFramedPanel(graphics, panelX, panelY, panelX + panelWidth, panelY + panelHeight);
 
         clampAlternativeScroll();
         int start = alternativeScroll;
@@ -2569,7 +3884,9 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         if (bounds.leaf() != null) {
             members = bounds.leaf().members();
         } else if (bounds.material() != null) {
-            members = collectUnresolvedInputsBySignature(context.root(), signatureOf(bounds.material()));
+            members = collectUnresolvedInputsForMaterial(bounds.material()).stream()
+                    .map(UnresolvedInputSlot::input)
+                    .toList();
         } else {
             members = List.of();
         }
@@ -2633,15 +3950,13 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     private void renderSlot(GuiGraphics graphics, int x, int y, ItemStack stack) {
-        RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
-        graphics.fill(x, y, x + 18, y + 18, theme.slotBorder());
-        graphics.fill(x + 1, y + 1, x + 17, y + 17, theme.slotMiddle());
-        graphics.fill(x + 2, y + 2, x + 16, y + 16, theme.slotInner());
+        RecipeTreeTheme.drawSlot(graphics, x, y);
         if (!stack.isEmpty()) {
             graphics.renderItem(stack, x + 1, y + 1);
             graphics.renderItemDecorations(this.font, stack, x + 1, y + 1);
         }
     }
+
 
     private void renderIngredientAt(GuiGraphics graphics, @Nullable ITypedIngredient<?> ingredient, int x, int y) {
         if (ingredient == null) {
@@ -2656,26 +3971,35 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         if (ingredientManager == null) {
             return;
         }
+        graphics.pose().pushPose();
+        graphics.pose().translate(0.0F, 0.0F, 120.0F);
         renderJeiIngredientTyped(graphics, ingredientManager, ingredient, x, y);
+        graphics.pose().popPose();
     }
 
     private void renderVanillaIngredientTooltip(GuiGraphics graphics, ITypedIngredient<?> ingredient, int mouseX, int mouseY) {
+        List<Component> tooltip = ingredientTooltipLines(ingredient);
+        if (!tooltip.isEmpty()) {
+            graphics.renderTooltip(this.font, tooltip, Optional.empty(), mouseX, mouseY);
+        }
+    }
+
+    private List<Component> ingredientTooltipLines(@Nullable ITypedIngredient<?> ingredient) {
+        if (ingredient == null) {
+            return List.of();
+        }
         ItemStack stack = extractItemStack(ingredient);
         if (!stack.isEmpty()) {
-            graphics.renderTooltip(this.font, stack, mouseX, mouseY);
-            return;
+            return Screen.getTooltipFromItem(Minecraft.getInstance(), stack);
         }
         IIngredientManager ingredientManager = getIngredientManager();
         if (ingredientManager == null) {
-            return;
+            return List.of();
         }
         @SuppressWarnings("unchecked")
         ITypedIngredient<Object> typed = (ITypedIngredient<Object>) ingredient;
         IIngredientRenderer<Object> renderer = ingredientManager.getIngredientRenderer(typed.getType());
-        List<Component> tooltip = renderer.getTooltip(typed.getIngredient(), TooltipFlag.Default.NORMAL);
-        if (!tooltip.isEmpty()) {
-            graphics.renderTooltip(this.font, tooltip, Optional.empty(), mouseX, mouseY);
-        }
+        return List.copyOf(renderer.getTooltip(typed.getIngredient(), TooltipFlag.Default.NORMAL));
     }
 
     private static ItemStack extractItemStack(@Nullable ITypedIngredient<?> ingredient) {
@@ -2691,7 +4015,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
 
     private FloatingMaterialOverlayState.Snapshot createFloatingMaterialSnapshot() {
         List<FloatingMaterialOverlayState.Group> groups = new ArrayList<>();
-        collectFloatingMaterialGroups(context.root(), 1, groups);
+        collectFloatingMaterialGroups(context.root(), batchCount, groups);
         return new FloatingMaterialOverlayState.Snapshot(groups, context);
     }
 
@@ -2740,30 +4064,58 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     private void syncComputeQuantitiesButton() {
+        if (!settingsOpen) {
+            computeQuantitiesButton.setMessage(Component.empty());
+            return;
+        }
         computeQuantitiesButton.setMessage(Component.translatable(computeRecipeQuantities
                 ? "gui.jeict.recipe_tree.overview_quantity_compute_enabled"
                 : "gui.jeict.recipe_tree.overview_quantity_compute_disabled"));
     }
 
     private void syncToggleExistingPatternButton() {
-        toggleExistingPatternButton.setMessage(Component.literal(
-                context.disableExistingPatternExpansion() ? "已有样板:禁" : "已有样板:开"));
+        if (!settingsOpen) {
+            toggleExistingPatternButton.setMessage(Component.empty());
+            return;
+        }
+        toggleExistingPatternButton.setMessage(Component.translatable(context.disableExistingPatternExpansion()
+                ? "gui.jeict.recipe_tree.overview_toggle_existing_short_disabled"
+                : "gui.jeict.recipe_tree.overview_toggle_existing_short_enabled"));
     }
 
     private void syncAutoUniqueRecipeButton() {
+        if (!settingsOpen) {
+            autoUniqueRecipeButton.setMessage(Component.empty());
+            return;
+        }
         autoUniqueRecipeButton.setMessage(Component.translatable(autoExpandUniqueEncodableRecipe
-                ? "gui.jeict.recipe_tree.overview_auto_unique_enabled"
-                : "gui.jeict.recipe_tree.overview_auto_unique_disabled"));
+                ? "gui.jeict.recipe_tree.overview_auto_unique_short_enabled"
+                : "gui.jeict.recipe_tree.overview_auto_unique_short_disabled"));
+    }
+
+    private void syncMemoryReadingButton() {
+        if (!settingsOpen) {
+            memoryReadingButton.setMessage(Component.empty());
+            return;
+        }
+        memoryReadingButton.setMessage(Component.translatable(readRememberedSelections
+                ? "gui.jeict.recipe_tree.overview_memory_reading_enabled"
+                : "gui.jeict.recipe_tree.overview_memory_reading_disabled"));
     }
 
     private void syncAutoMergeButton() {
+        if (!settingsOpen) {
+            autoMergeButton.setMessage(Component.empty());
+            return;
+        }
         autoMergeButton.setMessage(autoMergeSameMaterials
                 ? Component.translatable("gui.jeict.recipe_tree.overview_merge_enabled")
                 : Component.translatable("gui.jeict.recipe_tree.overview_merge_disabled"));
     }
 
     private void syncStyleButton() {
-        styleButton.setMessage(RecipeTreeTheme.styleButtonMessage());
+        styleButton.setMessage(settingsOpen ? RecipeTreeTheme.styleButtonMessage() : Component.empty());
+        topMaterialRenderCacheDirty = true;
     }
 
     private void markAutoExpandUniqueDirty() {
@@ -2832,9 +4184,12 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
 
     private boolean hasExistingPatternForOutput(RecipeTreeRecipeViewModel recipe) {
         CraftingTreeBackend backend = CraftingTreeBackends.get();
-        return backend != null && backend.supportsExistingPatternHints()
-                && recipe != null && recipe.primaryOutputIngredient() != null
-                && backend.isCraftable(recipe.primaryOutputIngredient().getIngredient());
+        if (backend == null || !backend.supportsExistingPatternHints()
+                || recipe == null || recipe.primaryOutputIngredient() == null) {
+            return false;
+        }
+        return existingPatternRecipeCache.computeIfAbsent(recipe,
+                ignored -> backend.isCraftable(recipe.primaryOutputIngredient().getIngredient()));
     }
 
     private void collapseExpandedExistingPatternNodes(RecipeTreeNodeViewModel parent) {
@@ -2916,25 +4271,27 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 && mouseY >= button.getY() && mouseY <= button.getY() + button.getHeight();
     }
 
-    private void fillFramedPanel(GuiGraphics graphics, int left, int top, int right, int bottom, int border, int middle, int inner) {
-        graphics.fill(left, top, right, bottom, border);
-        graphics.fill(left + 1, top + 1, right - 1, bottom - 1, middle);
-        graphics.fill(left + 3, top + 3, right - 3, bottom - 3, inner);
+    private boolean isPointInsideBatchBadge(double mouseX, double mouseY) {
+        updateBatchBadgeBounds();
+        return batchBadgeBounds != null && batchBadgeBounds.contains(mouseX, mouseY);
     }
 
-    private static void drawBorder(GuiGraphics graphics, int left, int top, int right, int bottom, int color) {
-        graphics.fill(left, top, right, top + 1, color);
-        graphics.fill(left, bottom - 1, right, bottom, color);
-        graphics.fill(left, top, left + 1, bottom, color);
-        graphics.fill(right - 1, top, right, bottom, color);
+    /** Invisible vanilla button used only for focus, narration and hit testing. */
+    private static final class ChromeButton extends Button {
+        private ChromeButton(int x, int y, int width, int height, Component message, OnPress onPress) {
+            super(x, y, width, height, message, onPress, DEFAULT_NARRATION);
+        }
+
+        @Override
+        protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+            // painted by RecipeTreeOverviewScreen.renderAe2Button
+        }
     }
 
-    private void drawSmallControl(GuiGraphics graphics, int x, int y, int size, String text, int color) {
-        RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
-        graphics.fill(x, y, x + size, y + size, theme.controlBorder());
-        graphics.fill(x + 1, y + 1, x + size - 1, y + size - 1, theme.controlFill());
-        graphics.drawString(this.font, text, x + Math.max(2, (size - 4) / 2), y + 1, color, false);
+    private static Button chromeButton(int x, int y, int width, int height, Component message, Button.OnPress onPress) {
+        return new ChromeButton(x, y, width, height, message, onPress);
     }
+
 
     private static int safeMultiply(int left, int right) {
         long value = (long) left * (long) right;
@@ -2950,12 +4307,14 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         if (denominator <= 0) {
             return numerator;
         }
-        return (numerator + denominator - 1) / denominator;
+        long value = ((long) numerator + (long) denominator - 1L) / (long) denominator;
+        return (int) Math.min(Integer.MAX_VALUE, Math.max(1L, value));
     }
 
     private record GraphNode(@Nullable ITypedIngredient<?> ingredient, String title, String amount, String exactAmount,
             @Nullable RecipeTreeNodeViewModel recipeNode, @Nullable IDrawable machineIcon,
-            @Nullable Component machineName, @Nullable MergedLeaf mergedLeaf, List<GraphNode> children, int width) {
+            @Nullable Component machineName, @Nullable MergedLeaf mergedLeaf, boolean showsPatternHint,
+            List<GraphNode> children, int width) {
         private Component titleComponent() {
             return Component.literal(title);
         }
@@ -3014,9 +4373,25 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         }
     }
 
+    private record TopMaterialRenderData(RequestedIngredient material, int displayCount, int labelColor,
+            String label, int width, ItemStack stack, boolean showsPatternHint) {
+    }
+
     private record TopMaterialsPinButtonBounds(int x, int y, int width, int height) {
         private boolean contains(double mouseX, double mouseY) {
             return mouseX >= x && mouseX <= x + width && mouseY >= y && mouseY <= y + height;
+        }
+    }
+
+    private record BatchBadgeBounds(int x, int y, int width, int height) {
+        private boolean contains(double mouseX, double mouseY) {
+            return mouseX >= x && mouseX <= x + width && mouseY >= y && mouseY <= y + height;
+        }
+    }
+
+    private record RootBatchAnchor(int left, int right, int y) {
+        private int width() {
+            return Math.max(1, right - left);
         }
     }
 
@@ -3037,6 +4412,71 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private record AlternativeOptionBounds(int index, @Nullable ITypedIngredient<?> ingredient, int x, int y, int width, int height) {
         private boolean contains(double mouseX, double mouseY) {
             return mouseX >= x && mouseX <= x + width && mouseY >= y && mouseY <= y + height;
+        }
+    }
+
+    private record LayerRowRenderCache(int[] leftOffsets, int[] rightOffsets, int[] centerOffsets, int width,
+            int anchorCenterOffset) {
+    }
+
+    private record GenericTopMaterialRenderData(MergedLeaf leaf, String label, int width) {
+    }
+
+    private record GenericTopMaterialBounds(GenericTopMaterialRenderData data, int x, int y, int width, int height) {
+        private boolean contains(double mouseX, double mouseY) {
+            return mouseX >= x && mouseX <= x + width && mouseY >= y && mouseY <= y + height;
+        }
+    }
+
+    private static final class ItemTopMaterialAccumulator {
+        private final List<ItemStack> alternatives;
+        private final List<UnresolvedInputSlot> slots = new ArrayList<>();
+        private int totalAmount;
+
+        private ItemTopMaterialAccumulator(RecipeTreeInputViewModel input) {
+            alternatives = List.copyOf(input.orderedAlternativesView());
+        }
+
+        private void add(RecipeTreeInputViewModel input, RecipeTreeNodeViewModel parent, int amount) {
+            totalAmount = safeAdd(totalAmount, Math.max(1, amount));
+            slots.add(new UnresolvedInputSlot(input, parent));
+        }
+
+        private RequestedIngredient toRequestedIngredient() {
+            return new RequestedIngredient(alternatives, Math.max(1, totalAmount));
+        }
+
+        private List<UnresolvedInputSlot> slots() {
+            return List.copyOf(slots);
+        }
+    }
+
+    private final class GenericTopMaterialAccumulator {
+        private final List<RecipeTreeInputViewModel> members = new ArrayList<>();
+        private final List<RecipeTreeNodeViewModel> parents = new ArrayList<>();
+        private int totalAmount;
+
+        private GenericTopMaterialAccumulator(RecipeTreeInputViewModel input, RecipeTreeNodeViewModel parent) {
+        }
+
+        private void add(RecipeTreeInputViewModel input, RecipeTreeNodeViewModel parent, int amount) {
+            members.add(input);
+            parents.add(parent);
+            totalAmount = safeAdd(totalAmount, Math.max(1, amount));
+        }
+
+        private MergedLeaf toLeaf() {
+            RecipeTreeInputViewModel representative = members.getFirst();
+            return new MergedLeaf(resolveGroupIngredient(members), displayNameOf(representative), totalAmount,
+                    representative.amountText(), parents.getFirst(), List.copyOf(members), List.copyOf(parents));
+        }
+
+        private List<UnresolvedInputSlot> slots() {
+            List<UnresolvedInputSlot> slots = new ArrayList<>(members.size());
+            for (int i = 0; i < members.size(); i++) {
+                slots.add(new UnresolvedInputSlot(members.get(i), parents.get(i)));
+            }
+            return List.copyOf(slots);
         }
     }
 

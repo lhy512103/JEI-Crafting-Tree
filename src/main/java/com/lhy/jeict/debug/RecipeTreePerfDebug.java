@@ -10,12 +10,18 @@ import com.mojang.logging.LogUtils;
 public final class RecipeTreePerfDebug {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final long RENDER_SUMMARY_COOLDOWN_MS = 1000L;
+    /** JVM properties are fixed for the lifetime of a client; avoid reading them in the render loop. */
+    private static final boolean ENABLED = readEnabled();
     private static volatile long lastRenderSummaryMs;
 
     private RecipeTreePerfDebug() {
     }
 
     public static boolean isEnabled() {
+        return ENABLED;
+    }
+
+    private static boolean readEnabled() {
         String v = System.getProperty("jeict.debugRecipeTreePerf");
         if (v == null || v.isEmpty()) {
             return false;

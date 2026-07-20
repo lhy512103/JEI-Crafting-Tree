@@ -137,8 +137,7 @@ public final class FloatingMaterialOverlayState {
         graphics.pose().scale(scale, scale, 1.0F);
 
         RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
-        graphics.fill(0, 0, BASE_WIDTH, height, theme.overlayFill());
-        drawBorder(graphics, 0, 0, BASE_WIDTH, height, pinned ? theme.pinned() : theme.panelBorder());
+        RecipeTreeTheme.drawFramedPanel(graphics, 0, 0, BASE_WIDTH, height);
 
         graphics.drawString(font, Component.translatable("gui.jeict.recipe_tree.floating_materials_title"), 22, 6,
                 theme.metricText(), false);
@@ -212,12 +211,15 @@ public final class FloatingMaterialOverlayState {
                     if (isHovered) {
                         hoveredGroupIndex = groupIndex;
                         hoveredEntryIndex = entryIndex;
-                        graphics.fill(itemX - 1, itemY - 1, itemX + ITEM_SIZE + 1, itemY + ITEM_SIZE + 1, theme.hoverFill());
                         hoveredStack = entry.stack().copy();
                     }
 
                     ItemStack displayStack = entry.stack().copyWithCount(Math.max(1, entry.remaining() > 0 ? entry.remaining() : 1));
+                    RecipeTreeTheme.drawSlot(graphics, itemX - 1, itemY - 1);
                     graphics.renderItem(displayStack, itemX, itemY);
+                    if (isHovered) {
+                        RecipeTreeTheme.drawBorder(graphics, itemX - 2, itemY - 2, itemX + ITEM_SIZE + 2, itemY + ITEM_SIZE + 2, theme.accent());
+                    }
 
                     if (showAll && entry.remaining() <= 0) {
                         graphics.drawString(font, "\u2713", itemX + 10, itemY + 10, theme.enough(), true);
@@ -631,18 +633,14 @@ public final class FloatingMaterialOverlayState {
     }
 
     private static void drawControl(GuiGraphics graphics, int x, int y, String text, int color) {
-        RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
-        graphics.fill(x, y, x + CONTROL_SIZE, y + CONTROL_SIZE, theme.controlBorder());
-        graphics.fill(x + 1, y + 1, x + CONTROL_SIZE - 1, y + CONTROL_SIZE - 1, theme.controlFill());
+        RecipeTreeTheme.drawSmallControl(graphics, x, y, CONTROL_SIZE, false);
         graphics.drawString(Minecraft.getInstance().font, text, x + 3, y + 2, color, false);
     }
 
     private static void drawBorder(GuiGraphics graphics, int left, int top, int right, int bottom, int color) {
-        graphics.fill(left, top, right, top + 1, color);
-        graphics.fill(left, bottom - 1, right, bottom, color);
-        graphics.fill(left, top, left + 1, bottom, color);
-        graphics.fill(right - 1, top, right, bottom, color);
+        RecipeTreeTheme.drawBorder(graphics, left, top, right, bottom, color);
     }
+
 
     private static String formatCompactCount(int count) {
         if (count < 1000) {
