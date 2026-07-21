@@ -4014,45 +4014,43 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     private FloatingMaterialOverlayState.Snapshot createFloatingMaterialSnapshot() {
-        List<FloatingMaterialOverlayState.Group> groups = new ArrayList<>();
-        collectFloatingMaterialGroups(context.root(), batchCount, groups);
-        return new FloatingMaterialOverlayState.Snapshot(groups, context);
+        List<FloatingMaterialOverlayState.Entry> entries = new ArrayList<>();
+        refreshTopMaterialRenderCacheIfNeeded();
+        for (TopMaterialRenderData data : topMaterialRenderData) {
+            UnresolvedInputSlot slot = firstUnresolvedSlot(data.material());
+            entries.add(new FloatingMaterialOverlayState.Entry(data.stack(), null,
+                    data.displayCount(), data.label(), machineIcon(slot), machineName(slot), machineKey(slot)));
+        }
+        for (GenericTopMaterialRenderData data : genericTopMaterialRenderData) {
+            MergedLeaf leaf = data.leaf();
+            RecipeTreeNodeViewModel parent = leaf.parentNode();
+            entries.add(new FloatingMaterialOverlayState.Entry(ItemStack.EMPTY, leaf.ingredient(),
+                    leaf.totalAmount(), data.label(), parent.recipe().subtitleIcon(), parent.recipe().subtitle(),
+                    machineKey(parent)));
+        }
+        return new FloatingMaterialOverlayState.Snapshot(entries, context);
     }
 
-    private void collectFloatingMaterialGroups(RecipeTreeNodeViewModel node, int crafts,
-            List<FloatingMaterialOverlayState.Group> groups) {
-        List<FloatingMaterialOverlayState.Entry> entries = new ArrayList<>();
-        Map<RecipeTreeNodeViewModel, Integer> childRequirements = new LinkedHashMap<>();
-        for (RecipeTreeInputViewModel input : node.recipe().inputs()) {
-            int amount = Math.max(1, safeMultiply(crafts, input.amount()));
-            RecipeTreeNodeViewModel child = input.child();
-            if (child != null) {
-                childRequirements.merge(child, amount, RecipeTreeOverviewScreen::safeAdd);
-                ItemStack output = child.recipe().primaryOutput().copyWithCount(amount);
-                if (!output.isEmpty()) {
-                    entries.add(new FloatingMaterialOverlayState.Entry(output, amount));
-                }
-                continue;
-            }
-            ItemStack stack = input.displayStack();
-            if (stack.isEmpty()) {
-                RequestedIngredient requested = input.selectedRequestedIngredient();
-                if (requested != null && !requested.alternatives().isEmpty()) {
-                    stack = requested.alternatives().getFirst();
-                }
-            }
-            if (!stack.isEmpty()) {
-                entries.add(new FloatingMaterialOverlayState.Entry(stack.copyWithCount(amount), amount));
-            }
-        }
-        for (Map.Entry<RecipeTreeNodeViewModel, Integer> childRequirement : childRequirements.entrySet()) {
-            RecipeTreeNodeViewModel child = childRequirement.getKey();
-            int childCrafts = ceilDiv(childRequirement.getValue(), child.recipe().primaryOutputCount());
-            collectFloatingMaterialGroups(child, childCrafts, groups);
-        }
-        if (!entries.isEmpty()) {
-            groups.add(new FloatingMaterialOverlayState.Group(node.recipe().title(), entries));
-        }
+    private @Nullable UnresolvedInputSlot firstUnresolvedSlot(RequestedIngredient material) {
+        List<UnresolvedInputSlot> slots = unresolvedInputsBySignature.get(signatureOf(material));
+        return slots == null || slots.isEmpty() ? null : slots.getFirst();
+    }
+
+    private static @Nullable IDrawable machineIcon(@Nullable UnresolvedInputSlot slot) {
+        return slot == null ? null : slot.parentNode().recipe().subtitleIcon();
+    }
+
+    private static @Nullable Component machineName(@Nullable UnresolvedInputSlot slot) {
+        return slot == null ? null : slot.parentNode().recipe().subtitle();
+    }
+
+    private static String machineKey(@Nullable UnresolvedInputSlot slot) {
+        return slot == null ? "" : machineKey(slot.parentNode());
+    }
+
+    private static String machineKey(RecipeTreeNodeViewModel parent) {
+        Component name = parent.recipe().subtitle();
+        return name == null ? "" : name.toString();
     }
 
     private <T> void renderJeiIngredientTyped(GuiGraphics graphics, IIngredientManager ingredientManager, ITypedIngredient<?> ingredient,

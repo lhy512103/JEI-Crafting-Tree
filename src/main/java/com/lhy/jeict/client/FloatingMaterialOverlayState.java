@@ -1,19 +1,21 @@
 package com.lhy.jeict.client;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import org.jetbrains.annotations.Nullable;
 
 import com.lhy.jeict.jei.JeiCraftingTreePlugin;
 import com.lhy.jeict.recipe_tree.RecipeTreeRootContext;
+import com.lhy.jeict.util.GenericIngredientUtil;
 import com.mojang.blaze3d.platform.InputConstants;
 
+import mezz.jei.api.gui.drawable.IDrawable;
 import mezz.jei.api.ingredients.ITypedIngredient;
+import mezz.jei.api.ingredients.IIngredientRenderer;
+import mezz.jei.api.neoforge.NeoForgeTypes;
 import mezz.jei.api.recipe.IFocus;
 import mezz.jei.api.recipe.IFocusFactory;
 import mezz.jei.api.recipe.RecipeIngredientRole;
@@ -26,10 +28,13 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.ChatScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.TooltipFlag;
 import net.neoforged.neoforge.client.event.InputEvent;
 import net.neoforged.neoforge.client.event.ScreenEvent;
+import net.neoforged.neoforge.fluids.FluidStack;
 
 public final class FloatingMaterialOverlayState {
     private static final int BASE_WIDTH = 168;
@@ -37,16 +42,21 @@ public final class FloatingMaterialOverlayState {
     private static final int CONTROL_SIZE = 12;
     private static final int SCROLLBAR_WIDTH = 4;
     private static final int MAX_CONTENT_HEIGHT = 240;
-    private static final int ITEM_SIZE = 16;
-    private static final int ITEM_H_GAP = 14;
-    private static final int ITEMS_PER_ROW = 5;
-    private static final int ROW_HEIGHT = 22;
-    private static final int GROUP_HEADER_HEIGHT = 14;
+    private static final int CONTENT_PADDING = 6;
+    private static final int GROUP_WIDTH = BASE_WIDTH - CONTENT_PADDING * 2;
     private static final int GROUP_PADDING = 4;
+    private static final int GROUP_GAP = 4;
+    private static final int ICON_SIZE = 16;
+    private static final int MACHINE_SLOT_SIZE = 18;
+    private static final int ICON_GAP = 2;
+    private static final int MATERIAL_CELL_SIZE = ICON_SIZE + ICON_GAP;
+    private static final int MATERIAL_START_X = GROUP_PADDING + MACHINE_SLOT_SIZE + 4;
+    private static final int MATERIALS_PER_ROW = 7;
     private static final int SCROLL_STEP = 14;
     private static final float JEI_BOOKMARK_Z = 200.0F;
     private static final float OVERLAY_Z = JEI_BOOKMARK_Z + 1.0F;
     private static final float TOOLTIP_Z = OVERLAY_Z + 400.0F;
+    private static final ResourceLocation MICRO_AMOUNT_FONT = ResourceLocation.withDefaultNamespace("uniform");
 
     private static Snapshot snapshot;
     private static int x = -1;
@@ -63,10 +73,12 @@ public final class FloatingMaterialOverlayState {
     private static int scrollOffset;
     private static int maxScrollOffset;
     private static boolean showAll;
-    private static final Set<String> collapsedGroupKeys = new HashSet<>();
-    private static int hoveredGroupIndex = -1;
-    private static int hoveredEntryIndex = -1;
     private static long lastTitleClickTime;
+    private static List<DisplayGroup> cachedDisplayGroups = List.of();
+    private static @Nullable Inventory cachedInventory;
+    private static int cachedInventoryVersion = Integer.MIN_VALUE;
+    private static boolean cachedShowAll;
+    private static boolean displayEntriesDirty = true;
 
     private FloatingMaterialOverlayState() {
     }
@@ -75,9 +87,7 @@ public final class FloatingMaterialOverlayState {
         snapshot = nextSnapshot;
         scrollOffset = 0;
         maxScrollOffset = 0;
-        collapsedGroupKeys.clear();
-        hoveredGroupIndex = -1;
-        hoveredEntryIndex = -1;
+        displayEntriesDirty = true;
         Minecraft minecraft = Minecraft.getInstance();
         if (x < 0 && minecraft.getWindow() != null) {
             x = Math.max(6, minecraft.getWindow().getGuiScaledWidth() - Math.round(BASE_WIDTH * scale) - 8);
@@ -91,9 +101,10 @@ public final class FloatingMaterialOverlayState {
         leftMouseDown = false;
         scrollOffset = 0;
         maxScrollOffset = 0;
-        collapsedGroupKeys.clear();
-        hoveredGroupIndex = -1;
-        hoveredEntryIndex = -1;
+        cachedDisplayGroups = List.of();
+        cachedInventory = null;
+        cachedInventoryVersion = Integer.MIN_VALUE;
+        displayEntriesDirty = true;
     }
 
     public static void render(GuiGraphics graphics) {
@@ -101,7 +112,7 @@ public final class FloatingMaterialOverlayState {
             clear();
             return;
         }
-        if (snapshot == null || snapshot.groups().isEmpty()) {
+        if (snapshot == null || snapshot.entries().isEmpty()) {
             return;
         }
         Minecraft minecraft = Minecraft.getInstance();
@@ -109,10 +120,7 @@ public final class FloatingMaterialOverlayState {
             return;
         }
         Font font = minecraft.font;
-        List<DisplayGroup> displayGroups = buildDisplayGroups(snapshot.groups());
-        if (displayGroups.isEmpty()) {
-            return;
-        }
+        List<DisplayGroup> displayGroups = displayGroups();
 
         int totalContentHeight = computeTotalContentHeight(displayGroups);
         int visibleContentHeight = MAX_CONTENT_HEIGHT;
@@ -148,96 +156,53 @@ public final class FloatingMaterialOverlayState {
         }
         drawControl(graphics, BASE_WIDTH - 18, 5, "x", theme.danger());
 
-        hoveredGroupIndex = -1;
-        hoveredEntryIndex = -1;
-        ItemStack hoveredStack = ItemStack.EMPTY;
+        DisplayEntry hoveredEntry = null;
+        Component hoveredMachineName = null;
 
         int contentTop = HEADER_HEIGHT + 4;
-        int currentY = contentTop - scrollOffset;
-
-        for (int groupIndex = 0; groupIndex < displayGroups.size(); groupIndex++) {
-            DisplayGroup group = displayGroups.get(groupIndex);
-            boolean collapsed = collapsedGroupKeys.contains(group.title().getString());
-            int groupHeight = collapsed ? GROUP_HEADER_HEIGHT : groupHeight(group.entries().size());
-            int groupBottom = currentY + groupHeight;
-
-            if (groupBottom < contentTop) {
-                currentY += groupHeight + GROUP_PADDING;
-                continue;
-            }
-            if (currentY > height - 4) {
-                graphics.drawString(font, "...", 8, height - 16, theme.mutedText(), false);
-                break;
-            }
-
-            int color = theme.groupColor(groupIndex);
-            int clippedTop = Math.max(currentY, contentTop);
-            int clippedBottom = Math.min(groupBottom, height - 4);
-            if (clippedTop < clippedBottom) {
-                graphics.fill(4, clippedTop, BASE_WIDTH - 4, clippedBottom, theme.overlayGroupFill());
-                drawBorder(graphics, 4, clippedTop, BASE_WIDTH - 4, clippedBottom, color);
-            }
-
-            if (currentY >= contentTop && currentY < height - 4) {
-                String collapseIcon = collapsed ? "\u25B6" : "\u25BC";
-                graphics.drawString(font, collapseIcon, 6, currentY + 3, color, false);
-                String titleText = font.substrByWidth(group.title(), BASE_WIDTH - 24).getString();
-                graphics.drawString(font, titleText, 16, currentY + 3, theme.metricText(), false);
-            }
-
-            if (!collapsed) {
-                int itemStartY = currentY + GROUP_HEADER_HEIGHT;
-                int entryIndex = 0;
-                int itemX = 8;
-                int itemY = itemStartY;
-                for (DisplayEntry entry : group.entries()) {
-                    if (itemY + ITEM_SIZE <= contentTop) {
-                        entryIndex++;
-                        itemX += ITEM_SIZE + ITEM_H_GAP;
-                        if (entryIndex % ITEMS_PER_ROW == 0) {
-                            itemX = 8;
-                            itemY += ROW_HEIGHT;
-                        }
-                        continue;
-                    }
-                    if (itemY >= height - 4) {
-                        break;
-                    }
-
-                    boolean isHovered = localMouseX >= itemX && localMouseX < itemX + ITEM_SIZE
-                            && localMouseY >= itemY && localMouseY < itemY + ITEM_SIZE
-                            && localMouseY >= contentTop && localMouseY < height - 4;
-
-                    if (isHovered) {
-                        hoveredGroupIndex = groupIndex;
-                        hoveredEntryIndex = entryIndex;
-                        hoveredStack = entry.stack().copy();
-                    }
-
-                    ItemStack displayStack = entry.stack().copyWithCount(Math.max(1, entry.remaining() > 0 ? entry.remaining() : 1));
-                    RecipeTreeTheme.drawSlot(graphics, itemX - 1, itemY - 1);
-                    graphics.renderItem(displayStack, itemX, itemY);
-                    if (isHovered) {
-                        RecipeTreeTheme.drawBorder(graphics, itemX - 2, itemY - 2, itemX + ITEM_SIZE + 2, itemY + ITEM_SIZE + 2, theme.accent());
-                    }
-
-                    if (showAll && entry.remaining() <= 0) {
-                        graphics.drawString(font, "\u2713", itemX + 10, itemY + 10, theme.enough(), true);
-                    } else {
-                        String label = entry.remaining() > 1 ? formatCompactCount(entry.remaining()) : "1";
-                        graphics.drawString(font, label, itemX + 17, itemY + 10, entry.color(), true);
-                    }
-
-                    entryIndex++;
-                    itemX += ITEM_SIZE + ITEM_H_GAP;
-                    if (entryIndex % ITEMS_PER_ROW == 0) {
-                        itemX = 8;
-                        itemY += ROW_HEIGHT;
+        int groupX = CONTENT_PADDING;
+        int groupY = contentTop - scrollOffset;
+        for (DisplayGroup group : displayGroups) {
+            int groupBottom = groupY + group.height();
+            if (groupBottom > contentTop && groupY < height - 4) {
+                boolean groupHovered = localMouseX >= groupX && localMouseX < groupX + GROUP_WIDTH
+                        && localMouseY >= groupY && localMouseY < groupBottom
+                        && localMouseY >= contentTop && localMouseY < height - 4;
+                RecipeTreeTheme.drawMarkdownNode(graphics, groupX, groupY, groupX + GROUP_WIDTH, groupBottom,
+                        theme.accent());
+                if (group.machineIcon() != null) {
+                    int machineX = groupX + GROUP_PADDING;
+                    int machineY = groupY + GROUP_PADDING;
+                    RecipeTreeTheme.drawSlot(graphics, machineX, machineY);
+                    group.machineIcon().draw(graphics, machineX + 1, machineY + 1);
+                    if (groupHovered
+                            && localMouseX >= machineX
+                            && localMouseX < machineX + MACHINE_SLOT_SIZE
+                            && localMouseY >= machineY
+                            && localMouseY < machineY + MACHINE_SLOT_SIZE) {
+                        hoveredMachineName = group.machineName();
                     }
                 }
+                for (int entryIndex = 0; entryIndex < group.entries().size(); entryIndex++) {
+                    DisplayEntry entry = group.entries().get(entryIndex);
+                    int itemX = groupX + MATERIAL_START_X
+                            + entryIndex % MATERIALS_PER_ROW * MATERIAL_CELL_SIZE;
+                    int itemY = groupY + GROUP_PADDING
+                            + entryIndex / MATERIALS_PER_ROW * MATERIAL_CELL_SIZE;
+                    renderEntryIngredient(graphics, entry.source(), itemX, itemY);
+                    renderEntryAmount(graphics, font, entry, itemX, itemY);
+                    if (groupHovered
+                            && localMouseX >= itemX && localMouseX < itemX + ICON_SIZE
+                            && localMouseY >= itemY && localMouseY < itemY + ICON_SIZE) {
+                        hoveredEntry = entry;
+                    }
+                }
+                if (groupHovered) {
+                    RecipeTreeTheme.drawBorder(graphics, groupX - 1, groupY - 1,
+                            groupX + GROUP_WIDTH + 1, groupBottom + 1, theme.accent());
+                }
             }
-
-            currentY += groupHeight + GROUP_PADDING;
+            groupY = groupBottom + GROUP_GAP;
         }
 
         if (maxScrollOffset > 0) {
@@ -257,16 +222,33 @@ public final class FloatingMaterialOverlayState {
 
         graphics.pose().popPose();
 
-        if (!hoveredStack.isEmpty()) {
+        Component controlTooltip = controlTooltipAt(localMouseX, localMouseY);
+        if (controlTooltip != null || hoveredEntry != null || hoveredMachineName != null) {
             graphics.pose().pushPose();
             graphics.pose().translate(0.0F, 0.0F, TOOLTIP_Z);
-            List<Component> tooltipLines = Screen.getTooltipFromItem(minecraft, hoveredStack);
-            tooltipLines.add(Component.translatable("gui.jeict.recipe_tree.floating_left_click_hint")
-                    .withStyle(s -> s.withColor(0xFFAAAAAA).withItalic(true)));
-            tooltipLines.add(Component.translatable("gui.jeict.recipe_tree.floating_right_click_hint")
-                    .withStyle(s -> s.withColor(0xFFAAAAAA).withItalic(true)));
-            graphics.renderTooltip(font, tooltipLines, hoveredStack.getTooltipImage(),
-                    hoveredStack, mouseX, mouseY);
+            if (controlTooltip != null) {
+                graphics.renderTooltip(font, List.of(controlTooltip), java.util.Optional.empty(), mouseX, mouseY);
+            } else if (hoveredMachineName != null) {
+                graphics.renderTooltip(font, List.of(hoveredMachineName),
+                        java.util.Optional.empty(), mouseX, mouseY);
+            } else {
+                List<Component> tooltipLines = ingredientTooltipLines(hoveredEntry.source());
+                tooltipLines.add(Component.translatable("gui.jeict.recipe_tree.floating_available_amount",
+                        formatEntryAmount(hoveredEntry.source(), hoveredEntry.available()))
+                        .withStyle(s -> s.withColor(0xFFAAAAAA)));
+                tooltipLines.add(Component.translatable("gui.jeict.recipe_tree.floating_required_amount",
+                        formatEntryAmount(hoveredEntry.source(), hoveredEntry.source().count()))
+                        .withStyle(s -> s.withColor(0xFFAAAAAA)));
+                int missingAmountColor = hoveredEntry.remaining() > 0 ? 0xFFFF5555 : 0xFF55FF55;
+                tooltipLines.add(Component.translatable("gui.jeict.recipe_tree.floating_missing_amount",
+                        formatEntryAmount(hoveredEntry.source(), hoveredEntry.remaining()))
+                        .withStyle(s -> s.withColor(missingAmountColor)));
+                tooltipLines.add(Component.translatable("gui.jeict.recipe_tree.floating_left_click_hint")
+                        .withStyle(s -> s.withColor(0xFFAAAAAA).withItalic(true)));
+                tooltipLines.add(Component.translatable("gui.jeict.recipe_tree.floating_right_click_hint")
+                        .withStyle(s -> s.withColor(0xFFAAAAAA).withItalic(true)));
+                graphics.renderTooltip(font, tooltipLines, java.util.Optional.empty(), mouseX, mouseY);
+            }
             graphics.pose().popPose();
         }
     }
@@ -379,6 +361,7 @@ public final class FloatingMaterialOverlayState {
 
         if (button == 0 && localX >= BASE_WIDTH - 44 && localX <= BASE_WIDTH - 32 && localY >= 5 && localY <= 17) {
             showAll = !showAll;
+            displayEntriesDirty = true;
             scrollOffset = 0;
             cancel(event);
             return true;
@@ -427,59 +410,51 @@ public final class FloatingMaterialOverlayState {
     }
 
     private static boolean handleContentClick(double localX, double localY, int button) {
-        List<DisplayGroup> displayGroups = buildDisplayGroups(snapshot.groups());
+        List<DisplayGroup> displayGroups = displayGroups();
         if (displayGroups.isEmpty()) {
             return false;
         }
 
         int contentTop = HEADER_HEIGHT + 4;
         int adjustedY = (int) localY + scrollOffset - contentTop;
-
-        int currentY = 0;
-        for (int groupIndex = 0; groupIndex < displayGroups.size(); groupIndex++) {
-            DisplayGroup group = displayGroups.get(groupIndex);
-            boolean collapsed = collapsedGroupKeys.contains(group.title().getString());
-            int groupHeight = collapsed ? GROUP_HEADER_HEIGHT : groupHeight(group.entries().size());
-
-            if (adjustedY >= currentY && adjustedY < currentY + GROUP_HEADER_HEIGHT) {
-                if (button == 0) {
-                    String key = group.title().getString();
-                    if (collapsedGroupKeys.contains(key)) {
-                        collapsedGroupKeys.remove(key);
-                    } else {
-                        collapsedGroupKeys.add(key);
+        int adjustedX = (int) localX - CONTENT_PADDING;
+        if (adjustedX < 0 || adjustedX >= GROUP_WIDTH || adjustedY < 0) {
+            return false;
+        }
+        int groupTop = 0;
+        for (DisplayGroup group : displayGroups) {
+            if (adjustedY >= groupTop && adjustedY < groupTop + group.height()) {
+                int materialX = adjustedX - MATERIAL_START_X;
+                int materialY = adjustedY - groupTop - GROUP_PADDING;
+                if (materialX >= 0 && materialY >= 0) {
+                    int col = materialX / MATERIAL_CELL_SIZE;
+                    int row = materialY / MATERIAL_CELL_SIZE;
+                    if (col < MATERIALS_PER_ROW
+                            && materialX % MATERIAL_CELL_SIZE < ICON_SIZE
+                            && materialY % MATERIAL_CELL_SIZE < ICON_SIZE) {
+                        int entryIndex = row * MATERIALS_PER_ROW + col;
+                        if (entryIndex < group.entries().size()) {
+                            openJeiForEntry(group.entries().get(entryIndex).source(), button);
+                        }
                     }
                 }
                 return true;
             }
-
-            if (!collapsed && adjustedY >= currentY + GROUP_HEADER_HEIGHT && adjustedY < currentY + groupHeight) {
-                int itemAreaY = adjustedY - currentY - GROUP_HEADER_HEIGHT;
-                int row = itemAreaY / ROW_HEIGHT;
-                int col = (int) (localX - 8) / (ITEM_SIZE + ITEM_H_GAP);
-                if (col >= 0 && col < ITEMS_PER_ROW && localX >= 8 && localX < BASE_WIDTH - 8) {
-                    int entryIndex = row * ITEMS_PER_ROW + col;
-                    if (entryIndex >= 0 && entryIndex < group.entries().size()) {
-                        DisplayEntry entry = group.entries().get(entryIndex);
-                        openJeiForItem(entry.stack(), button);
-                        return true;
-                    }
-                }
-            }
-
-            currentY += groupHeight + GROUP_PADDING;
+            groupTop += group.height() + GROUP_GAP;
         }
         return false;
     }
 
-    private static void openJeiForItem(ItemStack stack, int button) {
+    private static void openJeiForEntry(Entry entry, int button) {
         IJeiRuntime runtime = JeiCraftingTreePlugin.getJeiRuntime();
         if (runtime == null) {
             return;
         }
-        IIngredientManager ingredientManager = runtime.getIngredientManager();
-        ITypedIngredient<?> ingredient = ingredientManager.createTypedIngredient(stack.copyWithCount(1), true)
-                .orElse(null);
+        ITypedIngredient<?> ingredient = entry.ingredient();
+        if (ingredient == null && !entry.stack().isEmpty()) {
+            ingredient = runtime.getIngredientManager().createTypedIngredient(entry.stack().copyWithCount(1), true)
+                    .orElse(null);
+        }
         if (ingredient == null) {
             return;
         }
@@ -580,67 +555,162 @@ public final class FloatingMaterialOverlayState {
         return minecraft.mouseHandler.ypos() * minecraft.getWindow().getGuiScaledHeight() / minecraft.getWindow().getScreenHeight();
     }
 
+    private static int computeTotalContentHeight(List<DisplayGroup> groups) {
+        if (groups.isEmpty()) {
+            return 0;
+        }
+        int height = -GROUP_GAP;
+        for (DisplayGroup group : groups) {
+            height += group.height() + GROUP_GAP;
+        }
+        return height;
+    }
+
+    private static List<DisplayGroup> displayGroups() {
+        Minecraft minecraft = Minecraft.getInstance();
+        Inventory inventory = minecraft.player == null ? null : minecraft.player.getInventory();
+        int inventoryVersion = inventory == null ? -1 : inventory.getTimesChanged();
+        if (!displayEntriesDirty && inventory == cachedInventory
+                && inventoryVersion == cachedInventoryVersion && showAll == cachedShowAll) {
+            return cachedDisplayGroups;
+        }
+        Map<String, MutableDisplayGroup> grouped = new LinkedHashMap<>();
+        for (Entry entry : snapshot.entries()) {
+            boolean itemEntry = !entry.stack().isEmpty();
+            int available = itemEntry ? getItemCountInInventory(inventory, entry.stack()) : 0;
+            int remaining = Math.max(0, entry.count() - available);
+            if (itemEntry && !showAll && remaining <= 0) {
+                continue;
+            }
+            int color = remaining <= 0 ? 0xFF00918E : 0xFF911300;
+            Component badgeText = Component.literal(formatEntryAmount(entry, remaining).replace(" ", ""))
+                    .withStyle(style -> style.withFont(MICRO_AMOUNT_FONT));
+            grouped.computeIfAbsent(entry.machineKey(), ignored -> new MutableDisplayGroup(entry))
+                    .entries.add(new DisplayEntry(entry, Math.min(available, entry.count()), remaining, color,
+                            badgeText));
+        }
+        List<DisplayGroup> groups = new ArrayList<>(grouped.size());
+        for (MutableDisplayGroup group : grouped.values()) {
+            groups.add(group.freeze());
+        }
+        cachedDisplayGroups = List.copyOf(groups);
+        cachedInventory = inventory;
+        cachedInventoryVersion = inventoryVersion;
+        cachedShowAll = showAll;
+        displayEntriesDirty = false;
+        return cachedDisplayGroups;
+    }
+
     private static int groupHeight(int entryCount) {
-        int rows = (Math.max(0, entryCount - 1) / ITEMS_PER_ROW) + 1;
-        return GROUP_HEADER_HEIGHT + rows * ROW_HEIGHT;
-    }
-
-    private static int computeTotalContentHeight(List<DisplayGroup> displayGroups) {
-        int total = 0;
-        for (DisplayGroup group : displayGroups) {
-            boolean collapsed = collapsedGroupKeys.contains(group.title().getString());
-            total += (collapsed ? GROUP_HEADER_HEIGHT : groupHeight(group.entries().size())) + GROUP_PADDING;
-        }
-        return total;
-    }
-
-    private static List<DisplayGroup> buildDisplayGroups(List<Group> groups) {
-        List<DisplayGroup> displayGroups = new ArrayList<>();
-        for (Group group : groups) {
-            Map<String, DisplayEntryAccumulator> merged = new LinkedHashMap<>();
-            for (Entry entry : group.entries()) {
-                if (entry.stack().isEmpty()) {
-                    continue;
-                }
-                String key = stackKey(entry.stack());
-                merged.computeIfAbsent(key, ignored -> new DisplayEntryAccumulator(entry.stack())).add(entry.count());
-            }
-
-            List<DisplayEntry> entries = new ArrayList<>();
-            for (DisplayEntryAccumulator accumulator : merged.values()) {
-                int available = getItemCountInInventory(accumulator.stack);
-                int remaining = Math.max(0, accumulator.count - available);
-                if (!showAll && remaining <= 0) {
-                    continue;
-                }
-                int color;
-                if (remaining <= 0) {
-                    color = RecipeTreeTheme.current().enough();
-                } else if (available <= 0) {
-                    color = RecipeTreeTheme.current().missing();
-                } else {
-                    color = RecipeTreeTheme.current().partial();
-                }
-                ItemStack displayStack = accumulator.stack.copyWithCount(1);
-                entries.add(new DisplayEntry(displayStack, remaining, accumulator.count, color));
-            }
-
-            if (!entries.isEmpty()) {
-                displayGroups.add(new DisplayGroup(group.title(), List.copyOf(entries)));
-            }
-        }
-        return List.copyOf(displayGroups);
+        int rows = Math.max(1, (entryCount + MATERIALS_PER_ROW - 1) / MATERIALS_PER_ROW);
+        int materialHeight = rows * MATERIAL_CELL_SIZE - ICON_GAP;
+        return GROUP_PADDING * 2 + Math.max(MACHINE_SLOT_SIZE, materialHeight);
     }
 
     private static void drawControl(GuiGraphics graphics, int x, int y, String text, int color) {
         RecipeTreeTheme.drawSmallControl(graphics, x, y, CONTROL_SIZE, false);
-        graphics.drawString(Minecraft.getInstance().font, text, x + 3, y + 2, color, false);
+        Font font = Minecraft.getInstance().font;
+        int textY = y + Math.max(0, (CONTROL_SIZE - font.lineHeight) / 2);
+        graphics.drawCenteredString(font, text, x + CONTROL_SIZE / 2, textY, color);
     }
 
-    private static void drawBorder(GuiGraphics graphics, int left, int top, int right, int bottom, int color) {
-        RecipeTreeTheme.drawBorder(graphics, left, top, right, bottom, color);
+    private static @Nullable Component controlTooltipAt(double localMouseX, double localMouseY) {
+        if (localMouseY < 5 || localMouseY > 17) {
+            return null;
+        }
+        if (localMouseX >= 6 && localMouseX <= 18) {
+            return Component.translatable(pinned
+                    ? "gui.jeict.recipe_tree.floating_unpin_tooltip"
+                    : "gui.jeict.recipe_tree.floating_pin_tooltip");
+        }
+        if (localMouseX >= 22 && localMouseX < BASE_WIDTH - 44) {
+            return Component.translatable("gui.jeict.recipe_tree.floating_scale_tooltip",
+                    Math.round(scale * 100.0F));
+        }
+        if (localMouseX >= BASE_WIDTH - 44 && localMouseX <= BASE_WIDTH - 32) {
+            return Component.translatable(showAll
+                    ? "gui.jeict.recipe_tree.floating_missing_only_tooltip"
+                    : "gui.jeict.recipe_tree.floating_show_all_tooltip");
+        }
+        if (snapshot.context() != null
+                && localMouseX >= BASE_WIDTH - 31 && localMouseX <= BASE_WIDTH - 19) {
+            return Component.translatable("gui.jeict.recipe_tree.floating_back_tooltip");
+        }
+        if (localMouseX >= BASE_WIDTH - 18 && localMouseX <= BASE_WIDTH - 6) {
+            return Component.translatable("gui.jeict.recipe_tree.floating_close_tooltip");
+        }
+        return null;
     }
 
+    private static void renderEntryIngredient(GuiGraphics graphics, Entry entry, int x, int y) {
+        if (!entry.stack().isEmpty()) {
+            graphics.renderItem(entry.stack().copyWithCount(1), x, y);
+            return;
+        }
+        ITypedIngredient<?> ingredient = entry.ingredient();
+        IJeiRuntime runtime = JeiCraftingTreePlugin.getJeiRuntime();
+        if (ingredient == null || runtime == null) {
+            return;
+        }
+        IIngredientManager ingredientManager = runtime.getIngredientManager();
+        FluidStack renderFluid = entry.renderFluid();
+        if (renderFluid != null && !renderFluid.isEmpty()) {
+            IIngredientRenderer<FluidStack> renderer = ingredientManager.getIngredientRenderer(NeoForgeTypes.FLUID_STACK);
+            renderer.render(graphics, renderFluid, x, y);
+            return;
+        }
+        renderTypedIngredient(graphics, ingredientManager, ingredient, x, y);
+    }
+
+    private static void renderEntryAmount(GuiGraphics graphics, Font font, DisplayEntry entry, int x, int y) {
+        Component label = entry.badgeText();
+        float textScale = 0.75F;
+        int textWidth = font.width(label);
+        float textX = x + 17 - textWidth * textScale;
+        float textY = y + 17 - font.lineHeight * textScale;
+        graphics.pose().pushPose();
+        graphics.pose().translate(textX, textY, 300.0F);
+        graphics.pose().scale(textScale, textScale, 1.0F);
+        graphics.drawString(font, label, 1, 1, entry.color(), false);
+        graphics.drawString(font, label, 0, 0, 0xFFFFFFFF, false);
+        graphics.pose().popPose();
+    }
+
+    private static String formatEntryAmount(Entry entry, int amount) {
+        int safeAmount = Math.max(0, amount);
+        ITypedIngredient<?> ingredient = entry.ingredient();
+        if (usesMilliBucketUnits(entry)) {
+            if (safeAmount < 1000) {
+                return safeAmount + " mB";
+            }
+            return java.math.BigDecimal.valueOf(safeAmount, 3).stripTrailingZeros().toPlainString() + " B";
+        }
+        return formatCompactCount(safeAmount);
+    }
+
+    private static boolean usesMilliBucketUnits(Entry entry) {
+        ITypedIngredient<?> ingredient = entry.ingredient();
+        if (ingredient == null) {
+            return false;
+        }
+        if (ingredient.getIngredient(NeoForgeTypes.FLUID_STACK).filter(stack -> !stack.isEmpty()).isPresent()) {
+            return true;
+        }
+        return GenericIngredientUtil.tryGetMekanismChemicalAmount(ingredient.getIngredient()) > 0L;
+    }
+
+    private static @Nullable FluidStack createRenderFluid(@Nullable ITypedIngredient<?> ingredient) {
+        if (ingredient == null) {
+            return null;
+        }
+        FluidStack fluid = ingredient.getIngredient(NeoForgeTypes.FLUID_STACK).orElse(null);
+        if (fluid == null || fluid.isEmpty()) {
+            return null;
+        }
+        FluidStack renderFluid = fluid.copy();
+        renderFluid.setAmount(Math.max(1000, renderFluid.getAmount()));
+        return renderFluid;
+    }
 
     private static String formatCompactCount(int count) {
         if (count < 1000) {
@@ -659,12 +729,39 @@ public final class FloatingMaterialOverlayState {
         return String.format(java.util.Locale.ROOT, "%.1f%s", value, suffixes[suffixIndex]);
     }
 
-    private static int getItemCountInInventory(ItemStack stack) {
+    private static List<Component> ingredientTooltipLines(Entry entry) {
         Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.player == null) {
+        if (!entry.stack().isEmpty()) {
+            return new ArrayList<>(Screen.getTooltipFromItem(minecraft, entry.stack()));
+        }
+        ITypedIngredient<?> ingredient = entry.ingredient();
+        IJeiRuntime runtime = JeiCraftingTreePlugin.getJeiRuntime();
+        if (ingredient == null || runtime == null) {
+            return new ArrayList<>();
+        }
+        return typedIngredientTooltip(runtime.getIngredientManager(), ingredient);
+    }
+
+    private static <T> void renderTypedIngredient(GuiGraphics graphics, IIngredientManager ingredientManager,
+            ITypedIngredient<?> ingredient, int x, int y) {
+        @SuppressWarnings("unchecked")
+        ITypedIngredient<T> typed = (ITypedIngredient<T>) ingredient;
+        IIngredientRenderer<T> renderer = ingredientManager.getIngredientRenderer(typed.getType());
+        renderer.render(graphics, typed.getIngredient(), x, y);
+    }
+
+    private static <T> List<Component> typedIngredientTooltip(IIngredientManager ingredientManager,
+            ITypedIngredient<?> ingredient) {
+        @SuppressWarnings("unchecked")
+        ITypedIngredient<T> typed = (ITypedIngredient<T>) ingredient;
+        IIngredientRenderer<T> renderer = ingredientManager.getIngredientRenderer(typed.getType());
+        return new ArrayList<>(renderer.getTooltip(typed.getIngredient(), TooltipFlag.Default.NORMAL));
+    }
+
+    private static int getItemCountInInventory(@Nullable Inventory inventory, ItemStack stack) {
+        if (inventory == null) {
             return 0;
         }
-        Inventory inventory = minecraft.player.getInventory();
         int count = 0;
         for (int i = 0; i < inventory.getContainerSize(); i++) {
             ItemStack invStack = inventory.getItem(i);
@@ -675,77 +772,49 @@ public final class FloatingMaterialOverlayState {
         return count;
     }
 
-    public record Snapshot(List<Group> groups, @Nullable RecipeTreeRootContext context) {
+    public record Snapshot(List<Entry> entries, @Nullable RecipeTreeRootContext context) {
         public Snapshot {
-            groups = List.copyOf(groups);
+            entries = List.copyOf(entries);
         }
     }
 
-    private record DisplayGroup(Component title, List<DisplayEntry> entries) {
+    private record DisplayEntry(Entry source, int available, int remaining, int color, Component badgeText) {
     }
 
-    private record DisplayEntry(ItemStack stack, int remaining, int totalNeeded, int color) {
+    private record DisplayGroup(@Nullable IDrawable machineIcon, @Nullable Component machineName,
+            List<DisplayEntry> entries, int height) {
     }
 
-    public record Group(Component title, List<Entry> entries) {
-        public Group {
-            title = title == null ? Component.empty() : title.copy();
-            entries = mergeEntries(entries);
+    private static final class MutableDisplayGroup {
+        private final @Nullable IDrawable machineIcon;
+        private final @Nullable Component machineName;
+        private final List<DisplayEntry> entries = new ArrayList<>();
+
+        private MutableDisplayGroup(Entry firstEntry) {
+            machineIcon = firstEntry.machineIcon();
+            machineName = firstEntry.machineName();
+        }
+
+        private DisplayGroup freeze() {
+            return new DisplayGroup(machineIcon, machineName, List.copyOf(entries), groupHeight(entries.size()));
         }
     }
 
-    public record Entry(ItemStack stack, int count) {
+    public record Entry(ItemStack stack, @Nullable ITypedIngredient<?> ingredient, int count, String amountLabel,
+            @Nullable IDrawable machineIcon, @Nullable Component machineName, String machineKey,
+            @Nullable FluidStack renderFluid) {
+        public Entry(ItemStack stack, @Nullable ITypedIngredient<?> ingredient, int count, String amountLabel,
+                @Nullable IDrawable machineIcon, @Nullable Component machineName, String machineKey) {
+            this(stack, ingredient, count, amountLabel, machineIcon, machineName, machineKey,
+                    createRenderFluid(ingredient));
+        }
+
         public Entry {
             stack = stack == null ? ItemStack.EMPTY : stack.copy();
             count = Math.max(1, count);
-        }
-    }
-
-    private static List<Entry> mergeEntries(List<Entry> entries) {
-        Map<String, EntryAccumulator> merged = new LinkedHashMap<>();
-        for (Entry entry : entries) {
-            if (entry == null || entry.stack().isEmpty()) {
-                continue;
-            }
-            String key = stackKey(entry.stack());
-            merged.computeIfAbsent(key, ignored -> new EntryAccumulator(entry.stack())).add(entry.count());
-        }
-        List<Entry> result = new ArrayList<>(merged.size());
-        for (EntryAccumulator accumulator : merged.values()) {
-            result.add(new Entry(accumulator.stack, accumulator.count));
-        }
-        return List.copyOf(result);
-    }
-
-    private static String stackKey(ItemStack stack) {
-        return stack.getItem() + "#" + stack.getComponents();
-    }
-
-    private static final class DisplayEntryAccumulator {
-        private final ItemStack stack;
-        private int count;
-
-        private DisplayEntryAccumulator(ItemStack stack) {
-            this.stack = stack.copyWithCount(1);
-        }
-
-        private void add(int amount) {
-            long value = (long) count + Math.max(1, amount);
-            count = (int) Math.min(Integer.MAX_VALUE, value);
-        }
-    }
-
-    private static final class EntryAccumulator {
-        private final ItemStack stack;
-        private int count;
-
-        private EntryAccumulator(ItemStack stack) {
-            this.stack = stack.copyWithCount(1);
-        }
-
-        private void add(int amount) {
-            long value = (long) count + Math.max(1, amount);
-            count = (int) Math.min(Integer.MAX_VALUE, value);
+            amountLabel = amountLabel == null ? "" : amountLabel;
+            machineKey = machineKey == null ? "" : machineKey;
+            renderFluid = renderFluid == null ? null : renderFluid.copy();
         }
     }
 }
