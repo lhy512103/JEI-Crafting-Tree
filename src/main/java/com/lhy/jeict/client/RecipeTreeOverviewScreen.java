@@ -20,6 +20,7 @@ import com.lhy.jeict.recipe_tree.RecipeTreeInputViewModel.DisplayOption;
 import com.lhy.jeict.recipe_tree.RecipeTreeNodeViewModel;
 import com.lhy.jeict.recipe_tree.RecipeTreeRecipeViewModel;
 import com.lhy.jeict.recipe_tree.RecipeTreeRootContext;
+import com.lhy.jeict.recipe_tree.RecipeTreeSearchIndex;
 import com.lhy.jeict.api.CraftingTreeBackend;
 import com.lhy.jeict.api.CraftingTreeBackends;
 import com.lhy.jeict.debug.RecipeTreePerfDebug;
@@ -27,6 +28,12 @@ import com.lhy.jeict.jei.JeiCraftingTreePlugin;
 import com.lhy.jeict.jei.RecipeTreeJeiLookup;
 import com.lhy.jeict.recipe_tree.RequestedIngredient;
 import com.lhy.jeict.util.GenericIngredientUtil;
+import com.lhy.jeict.planning.InventorySnapshot;
+import com.lhy.jeict.planning.RecipePlanResult;
+import com.lhy.jeict.planning.PlanTarget;
+import com.lhy.jeict.planning.RecipeTreePlanAdapter;
+import com.lhy.jeict.planning.SubstitutionStrategy;
+import com.lhy.jeict.config.RecipeTreeConfig;
 
 import mezz.jei.api.gui.drawable.IDrawable;
 import mezz.jei.api.constants.VanillaTypes;
@@ -38,6 +45,7 @@ import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
@@ -52,7 +60,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private static final int NODE_PART_PADDING = 2;
     private static final int LEVEL_GAP = 46;
     private static final int LEAF_GAP = 6;
-    private static final int AUTO_EXPAND_STEPS_PER_TICK = 32;
     private static final int VISIBILITY_MARGIN = 32;
     private static final int HEADER_HEIGHT = 36;
     private static final int FOOTER_HEIGHT = 34;
@@ -124,6 +131,21 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private Button zoomInButton;
     private Button fitViewButton;
     private Button settingsButton;
+    private Button projectsButton;
+    private Button planReportButton;
+    private Button undoButton;
+    private Button redoButton;
+    private Button strategyButton;
+    private EditBox searchBox;
+    private final RecipeTreeHistory history = new RecipeTreeHistory();
+    private final AsyncRecipePlanService planService = new AsyncRecipePlanService();
+    private RecipePlanResult planningResult = new RecipePlanResult(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), List.of(), Set.of());
+    private List<PlanTarget> planningTargets = List.of();
+    private long planningInventoryVersion = Long.MIN_VALUE;
+    private long planningFingerprint = Long.MIN_VALUE;
+    private boolean planningBusy;
+    private int searchResultIndex = -1;
+    private final Set<PositionedNode> focusedSearchPath = new HashSet<>();
     private @Nullable BatchBadgeBounds batchBadgeBounds;
     private double panX;
     private double panY;
@@ -166,7 +188,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         super(Component.translatable("gui.jeict.recipe_tree.overview_title"));
         this.context = context;
         this.returnScreen = returnScreen;
-        this.readRememberedSelections = RecipeTreeClientMemory.isMemoryReadingEnabled();
+        this.readRememberedSelections = RecipeTreeConfig.REMEMBER_SELECTIONS.get()
+                && RecipeTreeClientMemory.isMemoryReadingEnabled();
+        this.autoMergeSameMaterials = RecipeTreeConfig.AUTO_MERGE_MATERIALS.get();
+        this.computeRecipeQuantities = RecipeTreeConfig.COMPUTE_QUANTITIES.get();
+        this.autoExpandUniqueEncodableRecipe = RecipeTreeConfig.AUTO_EXPAND_UNIQUE_RECIPES.get();
     }
 
     @Override
@@ -178,6 +204,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 btn -> {
                     context.setDisableExistingPatternExpansion(!context.disableExistingPatternExpansion());
                     if (context.disableExistingPatternExpansion()) {
+                        recordHistory();
                         collapseExpandedExistingPatternNodes(context.root());
                     }
                     syncToggleExistingPatternButton();
@@ -186,6 +213,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         this.autoUniqueRecipeButton = chromeButton(this.width - 296, 8, 72, 18, Component.empty(),
                 btn -> {
                     autoExpandUniqueEncodableRecipe = !autoExpandUniqueEncodableRecipe;
+                    RecipeTreeConfig.AUTO_EXPAND_UNIQUE_RECIPES.set(autoExpandUniqueEncodableRecipe);
                     markAutoExpandUniqueDirty();
                     syncAutoUniqueRecipeButton();
                     rebuildLayout();
@@ -194,6 +222,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 btn -> {
                     readRememberedSelections = !readRememberedSelections;
                     rememberedSelectionsDirty = readRememberedSelections;
+                    RecipeTreeConfig.REMEMBER_SELECTIONS.set(readRememberedSelections);
                     RecipeTreeClientMemory.setMemoryReadingEnabled(readRememberedSelections);
                     syncMemoryReadingButton();
                     rebuildLayout();
@@ -201,12 +230,14 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         this.computeQuantitiesButton = chromeButton(this.width - 372, 8, 64, 18, Component.empty(),
                 btn -> {
                     computeRecipeQuantities = !computeRecipeQuantities;
+                    RecipeTreeConfig.COMPUTE_QUANTITIES.set(computeRecipeQuantities);
                     syncComputeQuantitiesButton();
                     refreshRenderedProjection();
                 });
         this.autoMergeButton = chromeButton(this.width - 148, 8, 68, 18, Component.empty(),
                 btn -> {
                     autoMergeSameMaterials = !autoMergeSameMaterials;
+                    RecipeTreeConfig.AUTO_MERGE_MATERIALS.set(autoMergeSameMaterials);
                     syncAutoMergeButton();
                     rebuildLayout();
                 });
@@ -224,12 +255,33 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             settingsOpen = !settingsOpen;
             updateSelectionButtons();
         });
+        this.searchBox = new EditBox(this.font, 64, 9, 150, 18, Component.translatable("gui.jeict.recipe_tree.search"));
+        this.searchBox.setMaxLength(96);
+        this.searchBox.setHint(Component.translatable("gui.jeict.recipe_tree.search_hint"));
+        this.searchBox.setResponder(value -> {
+            searchResultIndex = -1;
+            focusedSearchPath.clear();
+            selectedNode = null;
+        });
+        this.projectsButton = chromeButton(this.width - 520, 8, 58, 20, Component.translatable("gui.jeict.recipe_tree.projects"),
+                btn -> openProjects());
+        this.planReportButton = chromeButton(this.width - 456, 8, 52, 20,
+                Component.translatable("gui.jeict.recipe_tree.plan"), btn -> openPlanReport());
+        this.undoButton = chromeButton(this.width - 590, 8, 28, 20, Component.literal("↶"), btn -> undoLastEdit());
+        this.redoButton = chromeButton(this.width - 620, 8, 28, 20, Component.literal("↷"), btn -> redoLastEdit());
+        this.strategyButton = chromeButton(8, HEADER_HEIGHT + 8, 120, 24, Component.empty(), btn -> cycleSubstitutionStrategy());
         this.encodeButton = chromeButton(this.width / 2 - 74, this.height - 26, 70, 20,
                 Component.translatable("gui.jeict.recipe_tree.encode"), btn -> encodePatterns());
         this.uploadButton = chromeButton(this.width / 2 + 4, this.height - 26, 70, 20,
                 Component.translatable("gui.jeict.recipe_tree.upload"), btn -> uploadPatterns());
 
         this.addRenderableWidget(backButton);
+        this.addRenderableWidget(searchBox);
+        this.addRenderableWidget(projectsButton);
+        this.addRenderableWidget(planReportButton);
+        this.addRenderableWidget(undoButton);
+        this.addRenderableWidget(redoButton);
+        this.addRenderableWidget(strategyButton);
         this.addRenderableWidget(computeQuantitiesButton);
         this.addRenderableWidget(styleButton);
         this.addRenderableWidget(toggleExistingPatternButton);
@@ -248,6 +300,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         syncAutoUniqueRecipeButton();
         syncMemoryReadingButton();
         syncAutoMergeButton();
+        syncStrategyButton();
         updateSelectionButtons();
         rebuildLayout();
     }
@@ -260,7 +313,9 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         if (backend != null && backend.pollExistingPatternCachesStale()) {
             refreshCraftableDependentCaches();
         }
-        processAutoExpandUniqueRecipeSteps(AUTO_EXPAND_STEPS_PER_TICK);
+        processAutoExpandUniqueRecipeSteps(RecipeTreeConfig.MAX_AUTO_EXPAND_STEPS_PER_TICK.get());
+        long inventoryVersion = ClientInventorySnapshotCache.version();
+        if (inventoryVersion != planningInventoryVersion) requestPlanning();
         refreshTopMaterialRenderCacheIfNeeded();
     }
 
@@ -360,6 +415,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             autoApplyRememberedChildren(context.root());
             rememberedSelectionsDirty = false;
         }
+        requestPlanning();
         graphSubtreeWidthCache.clear();
         if (autoMergeSameMaterials) {
             this.rootNode = null;
@@ -1631,8 +1687,8 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         renderAe2WidgetChrome(graphics, mouseX, mouseY);
         renderDockPanels(graphics, theme, mouseX, mouseY);
         int headerTextRight = Math.max(72, toolbarLeft - 8);
-        graphics.enableScissor(64, 5, headerTextRight, HEADER_HEIGHT - 2);
-        graphics.drawString(this.font, context.root().recipe().title(), 66, 8, theme.titleText(), false);
+        graphics.enableScissor(222, 5, headerTextRight, HEADER_HEIGHT - 2);
+        graphics.drawString(this.font, context.root().recipe().title(), 224, 8, theme.titleText(), false);
         graphics.drawString(this.font, cachedRequiredPatternsTitleLine, 66, 21, theme.metricText(), false);
         graphics.disableScissor();
         String zoomLabel = Math.round(zoom * 100.0D) + "%";
@@ -1751,7 +1807,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
 
     private void renderFooterStatus(GuiGraphics graphics, RecipeTreeTheme.Palette theme) {
         Component summary = Component.translatable("gui.jeict.recipe_tree.footer_summary",
-                topMaterials.size() + genericTopMaterialRenderData.size(), cachedMissingMaterialCount);
+                topMaterials.size() + genericTopMaterialRenderData.size(), cachedMissingMaterialCount)
+                .append(planningBusy
+                        ? Component.literal("  • ").append(Component.translatable("gui.jeict.recipe_tree.plan_calculating"))
+                        : Component.literal("  • raw=" + planningResult.totalRawUnits()
+                                + "  waste=" + planningResult.totalWasteUnits()));
         graphics.drawString(this.font, summary, canvasLeft() + 6, this.height - 21, theme.metricText(), false);
     }
 
@@ -1951,6 +2011,9 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         int maxRowY = (int) Math.ceil(visibleLogicalMaxY);
         for (List<Edge> row : edgeRows.subMap(minRowY, true, maxRowY, true).values()) {
             for (Edge edge : row) {
+                boolean focusedPathEdge = !focusedSearchPath.isEmpty()
+                        && focusedSearchPath.contains(edge.parent()) && focusedSearchPath.contains(edge.child());
+                if (hasSearchQuery() && !focusedSearchPath.isEmpty() && !focusedPathEdge) continue;
                 if (edgeMinX(edge) > visibleLogicalMaxX) {
                     break;
                 }
@@ -1963,9 +2026,10 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 int endY = edge.child().y();
                 lastRenderedEdgeCount++;
                 int midY = startY + Math.max(1, (endY - startY) / 2);
-                graphics.fill(startX, startY, startX + 1, midY, theme.edge());
-                graphics.fill(Math.min(startX, endX), midY, Math.max(startX, endX) + 1, midY + 1, theme.edge());
-                graphics.fill(endX, midY, endX + 1, endY, theme.edge());
+                int edgeColor = focusedPathEdge ? theme.accent() : theme.edge();
+                graphics.fill(startX, startY, startX + 1, midY, edgeColor);
+                graphics.fill(Math.min(startX, endX), midY, Math.max(startX, endX) + 1, midY + 1, edgeColor);
+                graphics.fill(endX, midY, endX + 1, endY, edgeColor);
             }
         }
     }
@@ -1993,11 +2057,13 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 if (x + width < visibleLogicalMinX) {
                     continue;
                 }
+                boolean searchMatch = matchesSearch(node.graph());
+                if (hasSearchQuery() && !searchMatch && !focusedSearchPath.contains(node)) continue;
                 visiblePositionedNodes.add(node);
                 lastRenderedNodeCount++;
-                int accent = node.graph().showsPatternHint()
+                int accent = searchMatch && hasSearchQuery() ? theme.accent() : (node.graph().showsPatternHint()
                         ? theme.patternHintBorder()
-                        : (node.graph().recipeNode() != null ? theme.controlHoverText() : theme.mutedText());
+                        : (node.graph().recipeNode() != null ? theme.controlHoverText() : theme.mutedText()));
                 RecipeTreeTheme.drawMarkdownNode(graphics, x, y, x + width, y + NODE_HEIGHT, accent);
                 if (node == selectedNode) {
                     RecipeTreeTheme.drawBorder(graphics, x - 1, y - 1, x + width + 1, y + NODE_HEIGHT + 1, theme.accent());
@@ -2169,10 +2235,12 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 if (!isLogicalRectVisible(currentX, rowY, currentX + materialWidth, rowY + NODE_HEIGHT)) {
                     continue;
                 }
+                boolean searchMatch = matchesSearch(material);
+                if (hasSearchQuery() && !searchMatch) continue;
                 lastRenderedLayerMaterialCount++;
-                int accent = material.showsPatternHint()
+                int accent = searchMatch && hasSearchQuery() ? theme.accent() : (material.showsPatternHint()
                         ? theme.patternHintBorder()
-                        : (!material.recipeTargets().isEmpty() ? theme.controlHoverText() : theme.mutedText());
+                        : (!material.recipeTargets().isEmpty() ? theme.controlHoverText() : theme.mutedText()));
                 RecipeTreeTheme.drawMarkdownNode(graphics, currentX, rowY,
                         currentX + materialWidth, rowY + NODE_HEIGHT, accent);
                 if (material == selectedLayerMaterial) {
@@ -3184,10 +3252,170 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         return false;
     }
 
+    private boolean hasSearchQuery() {
+        return searchBox != null && !searchBox.getValue().isBlank();
+    }
+
+    private boolean matchesSearch(GraphNode graph) {
+        if (!hasSearchQuery()) return true;
+        String query = searchBox.getValue().trim().toLowerCase(java.util.Locale.ROOT);
+        if (graph.recipeNode() != null && RecipeTreeSearchIndex.matches(graph.recipeNode().recipe(), query)) return true;
+        String machine = graph.machineName() == null ? "" : graph.machineName().getString();
+        return searchTextMatches(graph.title(), machine, query);
+    }
+
+    private boolean matchesSearch(LayerMaterial material) {
+        if (!hasSearchQuery()) return true;
+        String query = searchBox.getValue().trim().toLowerCase(java.util.Locale.ROOT);
+        String machine = material.machineName() == null ? "" : material.machineName().getString();
+        if (searchTextMatches(material.label(), machine, query)) return true;
+        return material.recipeTargets().stream().anyMatch(node -> RecipeTreeSearchIndex.matches(node.recipe(), query));
+    }
+
+    private boolean searchTextMatches(String label, String machine, String query) {
+        String value = query;
+        if (query.startsWith("#")) return machine.toLowerCase(java.util.Locale.ROOT).contains(query.substring(1));
+        if (query.startsWith("@")) value = query.substring(1);
+        return label.toLowerCase(java.util.Locale.ROOT).contains(value)
+                || machine.toLowerCase(java.util.Locale.ROOT).contains(value);
+    }
+
+    private void focusNextSearchResult() {
+        if (!hasSearchQuery()) return;
+        List<RecipeTreeNodeViewModel> matches = RecipeTreeSearchIndex.matchingNodes(context.root(), searchBox.getValue());
+        if (matches.isEmpty()) return;
+        searchResultIndex = (searchResultIndex + 1) % matches.size();
+        RecipeTreeNodeViewModel target = matches.get(searchResultIndex);
+        for (PositionedNode positioned : positionedNodes) {
+            if (positioned.graph().recipeNode() == target) {
+                selectedNode = positioned;
+                rebuildFocusedSearchPath(positioned);
+                panX = width * 0.5D - (positioned.x() + positioned.graph().width() * 0.5D) * zoom;
+                panY = height * 0.5D - (positioned.y() + NODE_HEIGHT * 0.5D) * zoom;
+                return;
+            }
+        }
+        for (LayerRow row : mergedLayerRows) for (LayerMaterial material : row.materials()) {
+            if (material.recipeTargets().contains(target)) {
+                selectedLayerMaterial = material;
+                return;
+            }
+        }
+    }
+
+
+    private void rebuildFocusedSearchPath(PositionedNode target) {
+        focusedSearchPath.clear();
+        PositionedNode cursor = target;
+        focusedSearchPath.add(cursor);
+        while (true) {
+            PositionedNode current = cursor;
+            Edge parentEdge = edges.stream().filter(edge -> edge.child().equals(current)).findFirst().orElse(null);
+            if (parentEdge == null) return;
+            cursor = parentEdge.parent();
+            if (!focusedSearchPath.add(cursor)) return;
+        }
+    }
+
+    @Override
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (searchBox != null && searchBox.isFocused() && (keyCode == 257 || keyCode == 335)) {
+            focusNextSearchResult();
+            return true;
+        }
+        return super.keyPressed(keyCode, scanCode, modifiers);
+    }
+
+    public void undoLastEdit() {
+        if (history.undo(context.projects())) rebuildLayout();
+    }
+
+    public void redoLastEdit() {
+        if (history.redo(context.projects())) rebuildLayout();
+    }
+
+    public void focusSearchField() {
+        if (searchBox != null) {
+            searchBox.setFocused(true);
+            this.setFocused(searchBox);
+        }
+    }
+
+    private void recordHistory() {
+        history.record(context.projects());
+    }
+
+    private void openProjects() {
+        this.minecraft.setScreen(new RecipeTreeProjectScreen(this, context.projects(), this::recordHistory,
+                this::rebuildLayout));
+    }
+
+    private void cycleSubstitutionStrategy() {
+        SubstitutionStrategy current = RecipeTreeConfig.SUBSTITUTION_STRATEGY.get();
+        SubstitutionStrategy[] strategies = SubstitutionStrategy.values();
+        SubstitutionStrategy next = strategies[(current.ordinal() + 1) % strategies.length];
+        RecipeTreeConfig.SUBSTITUTION_STRATEGY.set(next);
+        syncStrategyButton();
+        requestPlanning();
+    }
+
+    private void syncStrategyButton() {
+        if (strategyButton == null) return;
+        strategyButton.setMessage(Component.translatable("gui.jeict.recipe_tree.overview_strategy",
+                RecipeTreeConfig.SUBSTITUTION_STRATEGY.get().name()));
+    }
+
+    private void openPlanReport() {
+        this.minecraft.setScreen(new RecipeTreePlanReportScreen(this, planningResult, planningTargets,
+                ClientInventorySnapshotCache.get()));
+    }
+
+    private void requestPlanning() {
+        long inventoryVersion = ClientInventorySnapshotCache.version();
+        long fingerprint = planningFingerprint();
+        if (fingerprint == planningFingerprint && inventoryVersion == planningInventoryVersion) return;
+        planningFingerprint = fingerprint;
+        planningInventoryVersion = inventoryVersion;
+        InventorySnapshot inventory = ClientInventorySnapshotCache.get();
+        planningTargets = RecipeTreePlanAdapter.targets(context.projects().roots(), context.projects().amounts());
+        planningBusy = true;
+        planService.submit(planningTargets, inventory,
+                RecipeTreeConfig.SUBSTITUTION_STRATEGY.get(), RecipeTreeConfig.PREFERRED_NAMESPACE.get(), result -> {
+                    planningResult = result;
+                    planningBusy = false;
+                });
+    }
+
+    private long planningFingerprint() {
+        long hash = 17L;
+        hash = 31L * hash + RecipeTreeConfig.SUBSTITUTION_STRATEGY.get().ordinal();
+        hash = 31L * hash + RecipeTreeConfig.PREFERRED_NAMESPACE.get().hashCode();
+        Set<RecipeTreeNodeViewModel> visited = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Map.Entry<String, RecipeTreeNodeViewModel> entry : context.projects().roots().entrySet()) {
+            hash = 31L * hash + entry.getKey().hashCode();
+            hash = 31L * hash + Long.hashCode(context.projects().amounts().getOrDefault(entry.getKey(), 1L));
+            hash = fingerprintNode(entry.getValue(), hash, visited);
+        }
+        return hash;
+    }
+
+    private long fingerprintNode(RecipeTreeNodeViewModel node, long hash, Set<RecipeTreeNodeViewModel> visited) {
+        if (!visited.add(node)) return 31L * hash + 1L;
+        hash = 31L * hash + node.recipe().stableIdentity().hashCode();
+        for (RecipeTreeInputViewModel input : node.recipe().inputs()) {
+            hash = 31L * hash + input.selectedAlternativeIndex();
+            RecipeTreeNodeViewModel child = input.child();
+            hash = 31L * hash + (child == null ? 0L : 1L);
+            if (child != null) hash = fingerprintNode(child, hash, visited);
+        }
+        return hash;
+    }
+
     @Override
     public void onClose() {
         pendingJeiSelection = null;
         pendingAlternativeSelection = null;
+        planService.close();
         RecipeTreeClientMemory.flushPendingSave();
         this.minecraft.setScreen(returnScreen);
     }
@@ -3197,13 +3425,12 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         if (parent == null) {
             return;
         }
-        for (RecipeTreeInputViewModel input : parent.recipe().inputs()) {
-            if (input.child() != targetNode) {
-                continue;
-            }
+        for (int inputIndex = 0; inputIndex < parent.recipe().inputs().size(); inputIndex++) {
+            RecipeTreeInputViewModel input = parent.recipe().inputs().get(inputIndex);
+            if (input.child() != targetNode) continue;
             String signature = signatureOf(input);
-            forgetManualCollapse(signature);
-            context.rememberSelection(signature, selected);
+            forgetManualCollapse(parent, inputIndex, input, signature);
+            context.rememberSelection(parent, inputIndex, input, signature, selected);
         }
     }
 
@@ -3228,6 +3455,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             }
         }
         Map<String, Optional<RecipeTreeRecipeViewModel>> rememberedCache = new HashMap<>();
+        recordHistory();
         for (RecipeTreeNodeViewModel targetNode : batch) {
             rememberSelectionForNode(targetNode, selected);
             targetNode.setRecipe(selected);
@@ -3247,6 +3475,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 }
                 return;
             }
+            recordHistory();
             rememberSelectionForNode(targetNode, selected);
             targetNode.setRecipe(selected);
             autoApplyRememberedChildren(targetNode);
@@ -3261,6 +3490,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                     return;
                 }
             }
+            recordHistory();
             applyLeafSelection(targetLeaf, selected);
         }
         pendingJeiSelection = null;
@@ -3389,14 +3619,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
 
     private void applyLeafSelection(MergedLeaf target, RecipeTreeRecipeViewModel selected,
             Map<String, Optional<RecipeTreeRecipeViewModel>> rememberedCache) {
-        Set<String> rememberedSignatures = new HashSet<>();
-        for (RecipeTreeInputViewModel input : target.members()) {
-            String signature = signatureOf(input);
-            if (rememberedSignatures.add(signature)) {
-                forgetManualCollapse(signature);
-                context.rememberSelection(signature, selected);
-            }
-        }
         Map<RecipeTreeNodeViewModel, List<RecipeTreeInputViewModel>> byParent = new LinkedHashMap<>();
         for (int i = 0; i < target.members().size(); i++) {
             RecipeTreeInputViewModel input = target.members().get(i);
@@ -3404,8 +3626,13 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             byParent.computeIfAbsent(owner, ignored -> new ArrayList<>()).add(input);
         }
         for (Map.Entry<RecipeTreeNodeViewModel, List<RecipeTreeInputViewModel>> entry : byParent.entrySet()) {
-            RecipeTreeNodeViewModel childNode = new RecipeTreeNodeViewModel(selected, entry.getKey());
+            RecipeTreeNodeViewModel owner = entry.getKey();
+            RecipeTreeNodeViewModel childNode = new RecipeTreeNodeViewModel(selected, owner);
             for (RecipeTreeInputViewModel input : entry.getValue()) {
+                int inputIndex = owner.recipe().inputs().indexOf(input);
+                String signature = signatureOf(input);
+                forgetManualCollapse(owner, inputIndex, input, signature);
+                context.rememberSelection(owner, inputIndex, input, signature, selected);
                 input.setChild(childNode);
             }
             autoApplyRememberedChildren(childNode, rememberedCache);
@@ -3435,8 +3662,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         Set<RecipeTreeNodeViewModel> queuedChildren = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
         Map<String, RecipeTreeNodeViewModel> rememberedChildrenBySignature = new HashMap<>();
         Map<String, RecipeTreeNodeViewModel> expandedChildrenBySignature = new HashMap<>();
-        for (RecipeTreeInputViewModel input : parent.recipe().inputs()) {
+        for (int inputIndex = 0; inputIndex < parent.recipe().inputs().size(); inputIndex++) {
+            RecipeTreeInputViewModel input = parent.recipe().inputs().get(inputIndex);
+            int slotIndex = inputIndex;
             String signature = signatureOf(input);
+            String memoryKey = RecipeTreeMemoryKey.of(parent, slotIndex, input, signature);
             RecipeTreeNodeViewModel child = input.child();
             if (child != null) {
                 RecipeTreeNodeViewModel canonical = expandedChildrenBySignature.get(signature);
@@ -3446,10 +3676,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 } else {
                     expandedChildrenBySignature.putIfAbsent(signature, child);
                 }
-            } else if (!isManuallyCollapsed(signature)) {
+            } else if (!isManuallyCollapsed(parent, slotIndex, input, signature)) {
                 RecipeTreeRecipeViewModel remembered = rememberedCache
-                        .computeIfAbsent(signature,
-                                key -> Optional.ofNullable(context.getRememberedSelection(key, input.displayIngredient())))
+                        .computeIfAbsent(memoryKey,
+                                key -> Optional.ofNullable(context.getRememberedSelection(parent, slotIndex, input,
+                                        signature, input.displayIngredient())))
                         .orElse(null);
                 if (remembered != null && !parent.containsRecipe(remembered)) {
                     RecipeTreeNodeViewModel existing = expandedChildrenBySignature.get(signature);
@@ -3473,10 +3704,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     private boolean hasManuallyCollapsedInput(MergedLeaf leaf) {
-        for (RecipeTreeInputViewModel input : leaf.members()) {
-            if (isManuallyCollapsed(signatureOf(input))) {
-                return true;
-            }
+        for (int memberIndex = 0; memberIndex < leaf.members().size(); memberIndex++) {
+            RecipeTreeInputViewModel input = leaf.members().get(memberIndex);
+            RecipeTreeNodeViewModel parent = leaf.parentForMember(memberIndex);
+            int inputIndex = parent.recipe().inputs().indexOf(input);
+            if (isManuallyCollapsed(parent, inputIndex, input, signatureOf(input))) return true;
         }
         return false;
     }
@@ -3485,14 +3717,32 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         return manuallyCollapsedSignatures.contains(signature) || context.isCollapsed(signature);
     }
 
+    private boolean isManuallyCollapsed(RecipeTreeNodeViewModel parent, int inputIndex,
+            RecipeTreeInputViewModel input, String signature) {
+        return manuallyCollapsedSignatures.contains(signature)
+                || context.isCollapsed(parent, inputIndex, input, signature);
+    }
+
     private void rememberManualCollapse(String signature) {
         manuallyCollapsedSignatures.add(signature);
         context.rememberCollapsed(signature);
     }
 
+    private void rememberManualCollapse(RecipeTreeNodeViewModel parent, int inputIndex,
+            RecipeTreeInputViewModel input, String signature) {
+        manuallyCollapsedSignatures.add(signature);
+        context.rememberCollapsed(parent, inputIndex, input, signature);
+    }
+
     private void forgetManualCollapse(String signature) {
         manuallyCollapsedSignatures.remove(signature);
         context.forgetCollapsed(signature);
+    }
+
+    private void forgetManualCollapse(RecipeTreeNodeViewModel parent, int inputIndex,
+            RecipeTreeInputViewModel input, String signature) {
+        manuallyCollapsedSignatures.remove(signature);
+        context.forgetCollapsed(parent, inputIndex, input, signature);
     }
 
     private String signatureOf(RecipeTreeInputViewModel input) {
@@ -3584,12 +3834,12 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         if (parent == null) {
             return;
         }
-        for (RecipeTreeInputViewModel input : parent.recipe().inputs()) {
-            if (input.child() != node) {
-                continue;
-            }
+        for (int inputIndex = 0; inputIndex < parent.recipe().inputs().size(); inputIndex++) {
+            RecipeTreeInputViewModel input = parent.recipe().inputs().get(inputIndex);
+            if (input.child() != node) continue;
             String signature = signatureOf(input);
-            rememberManualCollapse(signature);
+            recordHistory();
+            rememberManualCollapse(parent, inputIndex, input, signature);
             collapseExpandedInputsBySignature(signature);
             return;
         }
@@ -3776,6 +4026,8 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         autoMergeButton.active = true;
         styleButton.visible = true;
         styleButton.active = true;
+        strategyButton.visible = true;
+        strategyButton.active = true;
         toggleExistingPatternButton.visible = backend != null && backend.supportsExistingPatternHints();
         toggleExistingPatternButton.active = toggleExistingPatternButton.visible;
 
@@ -3783,7 +4035,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         int settingsWidth = settingsOpen ? SETTINGS_WIDTH - 14 : 24;
         Button[] settingsButtons = {
                 autoMergeButton, computeQuantitiesButton, autoUniqueRecipeButton, memoryReadingButton,
-                toggleExistingPatternButton, styleButton
+                strategyButton, toggleExistingPatternButton, styleButton
         };
         settingsButton.setX(settingsX);
         settingsButton.setY(HEADER_HEIGHT + 8);
@@ -3816,6 +4068,27 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         zoomOutButton.setHeight(20);
         toolbarLeft = this.width - 160;
 
+        int headerActionsRight = this.width - 160;
+        planReportButton.setWidth(Math.max(48, this.font.width(planReportButton.getMessage()) + 12));
+        projectsButton.setWidth(Math.max(54, this.font.width(projectsButton.getMessage()) + 12));
+        redoButton.setWidth(24);
+        undoButton.setWidth(24);
+        for (Button button : new Button[] { planReportButton, projectsButton, redoButton, undoButton }) {
+            headerActionsRight -= button.getWidth();
+            button.setX(headerActionsRight);
+            button.setY(8);
+            button.setHeight(20);
+            headerActionsRight -= 4;
+        }
+        int searchRight = Math.max(160, headerActionsRight - 4);
+        searchBox.setX(64);
+        searchBox.setY(9);
+        searchBox.setWidth(Math.max(96, searchRight - 64));
+        projectsButton.visible = true;
+        planReportButton.visible = true;
+        undoButton.visible = true;
+        redoButton.visible = true;
+
         encodeButton.visible = backend != null && backend.supportsEncode();
         encodeButton.active = encodeButton.visible;
         uploadButton.visible = backend != null;
@@ -3840,6 +4113,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         syncAutoUniqueRecipeButton();
         syncMemoryReadingButton();
         syncAutoMergeButton();
+        syncStrategyButton();
     }
 
     private void renderAlternativeSelection(GuiGraphics graphics, int mouseX, int mouseY) {
@@ -3906,6 +4180,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         if (pendingAlternativeSelection == null) {
             return;
         }
+        recordHistory();
         for (RecipeTreeInputViewModel member : pendingAlternativeSelection.members()) {
             member.selectAlternative(index);
         }
@@ -4187,7 +4462,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             return false;
         }
         return existingPatternRecipeCache.computeIfAbsent(recipe,
-                ignored -> backend.isCraftable(recipe.primaryOutputIngredient().getIngredient()));
+                ignored -> backend.hasExactPattern(recipe));
     }
 
     private void collapseExpandedExistingPatternNodes(RecipeTreeNodeViewModel parent) {
@@ -4487,4 +4762,3 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         int layerMaterials;
     }
 }
-

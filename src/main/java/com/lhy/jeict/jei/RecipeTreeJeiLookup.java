@@ -10,9 +10,11 @@ import java.util.Optional;
 
 import org.jetbrains.annotations.Nullable;
 
+import com.lhy.jeict.config.RecipeTreeConfig;
 import com.lhy.jeict.recipe_tree.RecipeTreeInputViewModel;
 import com.lhy.jeict.recipe_tree.RecipeTreeInputViewModel.DisplayOption;
 import com.lhy.jeict.recipe_tree.RecipeTreeRecipeViewModel;
+import com.lhy.jeict.recipe_tree.RecipeTreeOutputViewModel;
 import com.lhy.jeict.recipe_tree.RequestedIngredient;
 import com.lhy.jeict.util.GenericIngredientUtil;
 
@@ -40,7 +42,9 @@ import mezz.jei.api.neoforge.NeoForgeTypes;
 
 public final class RecipeTreeJeiLookup {
     private static final Map<ResourceLocation, RecipeHandle> RECIPE_ID_INDEX = new HashMap<>();
+    private static final Map<String, List<RecipeHandle>> OUTPUT_RECIPE_INDEX = new HashMap<>();
     private static @Nullable IJeiRuntime recipeIdIndexRuntime;
+    private static @Nullable IJeiRuntime outputIndexRuntime;
 
     private RecipeTreeJeiLookup() {
     }
@@ -51,6 +55,7 @@ public final class RecipeTreeJeiLookup {
                 recipeSlots,
                 null,
                 Component.translatable("gui.jeict.recipe_tree.root_title"),
+                null,
                 null,
                 null));
     }
@@ -64,17 +69,30 @@ public final class RecipeTreeJeiLookup {
             return List.of();
         }
 
-        IFocusFactory focusFactory = runtime.getJeiHelpers().getFocusFactory();
-        IFocus<?> focus = createFocus(focusFactory, output);
-        Map<String, RecipeTreeRecipeViewModel> unique = new LinkedHashMap<>();
-
-        for (RecipeType<?> recipeType : getOrderedRecipeTypes(runtime)) {
-            collectFocusedRecipes(runtime, recipeType, focus, unique);
+        if (outputIndexRuntime != runtime) {
+            OUTPUT_RECIPE_INDEX.clear();
+            outputIndexRuntime = runtime;
         }
-
-        return unique.values().stream()
-                .sorted(Comparator.comparing(view -> view.title().getString()))
-                .toList();
+        String outputKey = typedIngredientSignature(runtime.getIngredientManager(), output);
+        List<RecipeHandle> handles = OUTPUT_RECIPE_INDEX.get(outputKey);
+        if (handles == null) {
+            IFocusFactory focusFactory = runtime.getJeiHelpers().getFocusFactory();
+            IFocus<?> focus = createFocus(focusFactory, output);
+            List<RecipeHandle> collected = new ArrayList<>();
+            for (RecipeType<?> recipeType : getOrderedRecipeTypes(runtime)) {
+                collectFocusedRecipeHandles(runtime, recipeType, focus, collected);
+                if (collected.size() >= RecipeTreeConfig.MAX_RECIPE_LOOKUP_RESULTS.get()) break;
+            }
+            handles = List.copyOf(collected.stream().limit(RecipeTreeConfig.MAX_RECIPE_LOOKUP_RESULTS.get()).toList());
+            OUTPUT_RECIPE_INDEX.put(outputKey, handles);
+        }
+        Map<String, RecipeTreeRecipeViewModel> unique = new LinkedHashMap<>();
+        for (RecipeHandle handle : handles) {
+            createSnapshotForRecipe(runtime, handle.category(), handle.recipe(), output)
+                    .filter(view -> matchesFocusOutput(runtime.getIngredientManager(), view.primaryOutputIngredient(), output))
+                    .ifPresent(view -> unique.putIfAbsent(signatureOf(runtime.getIngredientManager(), view), view));
+        }
+        return unique.values().stream().sorted(Comparator.comparing(view -> view.title().getString())).toList();
     }
 
     public static Optional<RecipeTreeRecipeViewModel> findRecipe(Object recipe) {
@@ -130,24 +148,24 @@ public final class RecipeTreeJeiLookup {
     }
 
     @SuppressWarnings({ "rawtypes", "unchecked" })
-    private static void collectFocusedRecipes(IJeiRuntime runtime, RecipeType<?> recipeType, IFocus<?> focus,
-            Map<String, RecipeTreeRecipeViewModel> unique) {
+    private static void collectFocusedRecipeHandles(IJeiRuntime runtime, RecipeType<?> recipeType, IFocus<?> focus,
+            List<RecipeHandle> result) {
         IRecipeCategory category = runtime.getRecipeManager().getRecipeCategory((RecipeType) recipeType);
-        if (category == null) {
-            return;
-        }
-
-        List<?> recipes = runtime.getRecipeManager()
-                .createRecipeLookup((RecipeType) recipeType)
-                .limitFocus(List.of(focus))
-                .get()
-                .toList();
-
+        if (category == null) return;
+        List<?> recipes = runtime.getRecipeManager().createRecipeLookup((RecipeType) recipeType)
+                .limitFocus(List.of(focus)).get().limit(RecipeTreeConfig.MAX_RECIPE_LOOKUP_RESULTS.get()).toList();
         for (Object recipe : recipes) {
-            createSnapshotForRecipe(runtime, category, recipe)
-                    .filter(view -> matchesFocusOutput(runtime.getIngredientManager(), view.primaryOutputIngredient(), focus.getTypedValue()))
-                    .ifPresent(view -> unique.putIfAbsent(signatureOf(runtime.getIngredientManager(), view), view));
+            result.add(new RecipeHandle(category, recipe));
+            if (result.size() >= RecipeTreeConfig.MAX_RECIPE_LOOKUP_RESULTS.get()) return;
         }
+    }
+
+    /** Clears all runtime-bound indexes after a JEI recipe reload or runtime replacement. */
+    public static void clearCaches() {
+        RECIPE_ID_INDEX.clear();
+        OUTPUT_RECIPE_INDEX.clear();
+        recipeIdIndexRuntime = null;
+        outputIndexRuntime = null;
     }
 
     @SuppressWarnings({ "rawtypes", "unchecked" })
@@ -199,14 +217,19 @@ public final class RecipeTreeJeiLookup {
 
     private static Optional<RecipeTreeRecipeViewModel> createSnapshotForRecipe(IJeiRuntime runtime, IRecipeCategory category,
             Object recipe) {
-        return createSnapshotForRecipeTyped(runtime, category, recipe);
+        return createSnapshotForRecipe(runtime, category, recipe, null);
+    }
+
+    private static Optional<RecipeTreeRecipeViewModel> createSnapshotForRecipe(IJeiRuntime runtime, IRecipeCategory category,
+            Object recipe, @Nullable ITypedIngredient<?> preferredOutput) {
+        return createSnapshotForRecipeTyped(runtime, category, recipe, preferredOutput);
     }
 
     private record RecipeHandle(IRecipeCategory<?> category, Object recipe) {
     }
 
     private static <T> Optional<RecipeTreeRecipeViewModel> createSnapshotForRecipeTyped(IJeiRuntime runtime,
-            IRecipeCategory<T> category, Object recipe) {
+            IRecipeCategory<T> category, Object recipe, @Nullable ITypedIngredient<?> preferredOutput) {
         T typedRecipe;
         try {
             @SuppressWarnings("unchecked")
@@ -227,49 +250,48 @@ public final class RecipeTreeJeiLookup {
         Component subtitle = category.getTitle();
         IDrawable subtitleIcon = category.getIcon();
         ResourceLocation recipeId = category.getRegistryName(typedRecipe);
-        return Optional.of(createSnapshot(layout.getRecipeSlotsView(), recipeId, title, subtitle, subtitleIcon));
+        return Optional.of(createSnapshot(layout.getRecipeSlotsView(), recipeId, title, subtitle, subtitleIcon, preferredOutput));
     }
 
     private static RecipeTreeRecipeViewModel createSnapshot(IRecipeSlotsView recipeSlots, @Nullable ResourceLocation recipeId,
-            Component title, @Nullable Component subtitle, @Nullable IDrawable subtitleIcon) {
+            Component title, @Nullable Component subtitle, @Nullable IDrawable subtitleIcon,
+            @Nullable ITypedIngredient<?> preferredOutput) {
         IJeiRuntime runtime = JeiCraftingTreePlugin.getJeiRuntime();
         IIngredientManager ingredientManager = runtime == null ? null : runtime.getIngredientManager();
-        ITypedIngredient<?> primaryOutputIngredient = null;
-        ItemStack primaryOutput = ItemStack.EMPTY;
-        int primaryOutputAmount = 1;
+        List<RecipeTreeOutputViewModel> collectedOutputs = new ArrayList<>();
+        int preferredIndex = -1;
         for (IRecipeSlotView outputSlot : recipeSlots.getSlotViews(RecipeIngredientRole.OUTPUT)) {
             ITypedIngredient<?> displayed = getDisplayedIngredient(outputSlot);
-            if (displayed != null) {
-                primaryOutputIngredient = displayed;
-                primaryOutput = extractItemStack(displayed, 1);
-                if (ingredientManager != null) {
-                    primaryOutputAmount = resolveDisplayedIngredientAmount(ingredientManager, displayed,
-                            Math.max(1, primaryOutput.getCount()));
-                } else {
-                    primaryOutputAmount = Math.max(1, primaryOutput.getCount());
-                }
-                break;
-            }
-        }
-
-        List<RecipeTreeInputViewModel> inputs = new ArrayList<>();
-        for (IRecipeSlotView slotView : recipeSlots.getSlotViews(RecipeIngredientRole.INPUT)) {
-            List<DisplayOption> displayOptions = ingredientManager == null ? List.of() : toDisplayOptions(ingredientManager, slotView);
-            RequestedIngredient ingredient = toRequestedIngredient(slotView);
-            if ((ingredient == null || ingredient.alternatives().isEmpty()) && displayOptions.isEmpty()) {
+            if (displayed == null) {
                 continue;
             }
-            int amount = 1;
-            if (ingredient != null) {
-                amount = Math.max(1, ingredient.count());
-            } else if (ingredientManager != null) {
-                ITypedIngredient<?> displayed = getDisplayedIngredient(slotView);
-                if (displayed != null) {
-                    amount = resolveDisplayedIngredientAmount(ingredientManager, displayed, 1);
-                }
+            ItemStack stack = extractItemStack(displayed, 1);
+            long amount = ingredientManager == null
+                    ? Math.max(1, stack.getCount())
+                    : resolveDisplayedIngredientAmountLong(ingredientManager, displayed, Math.max(1, stack.getCount()));
+            if (preferredIndex < 0 && preferredOutput != null && ingredientManager != null
+                    && matchesFocusOutput(ingredientManager, displayed, preferredOutput)) {
+                preferredIndex = collectedOutputs.size();
             }
-            inputs.add(new RecipeTreeInputViewModel(ingredient, displayOptions, amount, formatAmountText(slotView, amount)));
+            collectedOutputs.add(new RecipeTreeOutputViewModel(displayed, stack, amount, 1.0D, false));
         }
+        if (preferredIndex < 0 && !collectedOutputs.isEmpty()) {
+            preferredIndex = 0;
+        }
+        List<RecipeTreeOutputViewModel> outputs = new ArrayList<>(collectedOutputs.size());
+        for (int index = 0; index < collectedOutputs.size(); index++) {
+            outputs.add(collectedOutputs.get(index).withPrimary(index == preferredIndex));
+        }
+        RecipeTreeOutputViewModel primaryOutputView = preferredIndex >= 0
+                ? outputs.get(preferredIndex)
+                : new RecipeTreeOutputViewModel(null, ItemStack.EMPTY, 1L, 1.0D, true);
+        ITypedIngredient<?> primaryOutputIngredient = primaryOutputView.ingredient();
+        ItemStack primaryOutput = primaryOutputView.itemStack();
+        long primaryOutputAmount = primaryOutputView.amount();
+
+        List<RecipeTreeInputViewModel> inputs = new ArrayList<>();
+        appendInputs(inputs, recipeSlots.getSlotViews(RecipeIngredientRole.INPUT), ingredientManager, true);
+        appendInputs(inputs, recipeSlots.getSlotViews(RecipeIngredientRole.CATALYST), ingredientManager, false);
 
         Component resolvedTitle = title;
         if ((resolvedTitle == null || resolvedTitle.getString().isBlank()) && ingredientManager != null && primaryOutputIngredient != null) {
@@ -278,21 +300,45 @@ public final class RecipeTreeJeiLookup {
             resolvedTitle = primaryOutput.getHoverName();
         }
 
-        return new RecipeTreeRecipeViewModel(primaryOutputIngredient, primaryOutput, primaryOutputAmount, resolvedTitle, subtitle,
+        return new RecipeTreeRecipeViewModel(primaryOutputIngredient, primaryOutput, primaryOutputAmount, outputs, resolvedTitle, subtitle,
                 subtitleIcon, recipeId, inputs);
+    }
+
+    private static void appendInputs(List<RecipeTreeInputViewModel> inputs, List<IRecipeSlotView> slots,
+            @Nullable IIngredientManager ingredientManager, boolean consumed) {
+        for (IRecipeSlotView slotView : slots) {
+            List<DisplayOption> displayOptions = ingredientManager == null ? List.of()
+                    : toDisplayOptions(ingredientManager, slotView);
+            RequestedIngredient ingredient = toRequestedIngredient(slotView);
+            if ((ingredient == null || ingredient.alternatives().isEmpty()) && displayOptions.isEmpty()) continue;
+            long amount = ingredient == null ? 1L : Math.max(1L, ingredient.count());
+            if (ingredientManager != null) {
+                ITypedIngredient<?> displayed = getDisplayedIngredient(slotView);
+                if (displayed != null) amount = resolveDisplayedIngredientAmountLong(ingredientManager, displayed, amount);
+            }
+            inputs.add(new RecipeTreeInputViewModel(ingredient, displayOptions, amount,
+                    formatAmountText(slotView, (int) Math.min(Integer.MAX_VALUE, amount)), consumed));
+        }
     }
 
     private static int resolveDisplayedIngredientAmount(IIngredientManager ingredientManager, ITypedIngredient<?> displayed,
             int fallbackCount) {
+        return (int) Math.min(Integer.MAX_VALUE,
+                resolveDisplayedIngredientAmountLong(ingredientManager, displayed, fallbackCount));
+    }
+
+    private static long resolveDisplayedIngredientAmountLong(IIngredientManager ingredientManager,
+            ITypedIngredient<?> displayed, long fallbackCount) {
         Object raw = displayed.getIngredient();
         if (raw instanceof FluidStack fluidStack && !fluidStack.isEmpty()) {
-            return (int) Math.min(Integer.MAX_VALUE, Math.max(1L, fluidStack.getAmount()));
+            return Math.max(1L, fluidStack.getAmount());
         }
         long mek = GenericIngredientUtil.tryGetMekanismChemicalAmount(raw);
         if (mek > 0L) {
-            return (int) Math.min(Integer.MAX_VALUE, mek);
+            return mek;
         }
-        return getIngredientAmount(ingredientManager, displayed, fallbackCount);
+        return Math.max(1L, getIngredientAmount(ingredientManager, displayed,
+                (int) Math.min(Integer.MAX_VALUE, Math.max(1L, fallbackCount))));
     }
 
     private static Component extractTitle(IRecipeSlotsView recipeSlots, Component fallback) {

@@ -12,18 +12,25 @@ public final class RecipeTreeInputViewModel {
     private final @Nullable RequestedIngredient requestedIngredient;
     private final @Nullable String requestedIngredientSignature;
     private final List<DisplayOption> displayOptions;
-    private final int amount;
+    private final long amount;
     private final String amountText;
+    private final boolean consumed;
     private RecipeTreeNodeViewModel child;
     private int selectedAlternativeIndex;
 
     public RecipeTreeInputViewModel(@Nullable RequestedIngredient requestedIngredient, List<DisplayOption> displayOptions, int amount,
             String amountText) {
+        this(requestedIngredient, displayOptions, (long) amount, stringOrEmpty(amountText), true);
+    }
+
+    public RecipeTreeInputViewModel(@Nullable RequestedIngredient requestedIngredient, List<DisplayOption> displayOptions,
+            long amount, String amountText, boolean consumed) {
         this.requestedIngredient = requestedIngredient == null ? null : requestedIngredient.copy();
-        this.requestedIngredientSignature = signatureOf(this.requestedIngredient);
+        this.requestedIngredientSignature = signatureOf(this.requestedIngredient, displayOptions);
         this.displayOptions = List.copyOf(new ArrayList<>(displayOptions));
-        this.amount = Math.max(1, amount);
-        this.amountText = amountText == null ? "" : amountText;
+        this.amount = Math.max(1L, amount);
+        this.amountText = stringOrEmpty(amountText);
+        this.consumed = consumed;
     }
 
     public @Nullable RequestedIngredient requestedIngredient() {
@@ -52,7 +59,7 @@ public final class RecipeTreeInputViewModel {
     public ItemStack displayStack() {
         DisplayOption option = displayOption();
         if (option != null && !option.itemStack().isEmpty()) {
-            return option.itemStack().copyWithCount(amount);
+            return option.itemStack().copyWithCount((int) Math.min(Integer.MAX_VALUE, amount));
         }
         return ItemStack.EMPTY;
     }
@@ -68,7 +75,15 @@ public final class RecipeTreeInputViewModel {
     }
 
     public int amount() {
+        return (int) Math.min(Integer.MAX_VALUE, amount);
+    }
+
+    public long longAmount() {
         return amount;
+    }
+
+    public boolean consumed() {
+        return consumed;
     }
 
     public String amountText() {
@@ -169,17 +184,30 @@ public final class RecipeTreeInputViewModel {
         }
     }
 
-    private static @Nullable String signatureOf(@Nullable RequestedIngredient ingredient) {
-        if (ingredient == null) {
-            return null;
-        }
+    private static @Nullable String signatureOf(@Nullable RequestedIngredient ingredient, List<DisplayOption> options) {
         List<String> parts = new ArrayList<>();
-        for (ItemStack alternative : ingredient.alternatives()) {
-            if (!alternative.isEmpty()) {
-                parts.add("itemtype#" + alternative.getItem());
+        if (options != null) {
+            for (DisplayOption option : options) {
+                if (option.typedIngredient() != null) {
+                    parts.add(com.lhy.jeict.util.IngredientIdentityUtil.fallbackSignature(
+                            option.typedIngredient(), option.itemStack()));
+                }
             }
         }
+        if (parts.isEmpty() && ingredient != null) {
+            for (ItemStack alternative : ingredient.alternatives()) {
+                if (!alternative.isEmpty()) {
+                    parts.add("minecraft:item_stack#" + ItemStack.hashItemAndComponents(alternative)
+                            + ":" + alternative.getItem());
+                }
+            }
+        }
+        if (parts.isEmpty()) return null;
         parts.sort(String::compareTo);
         return "requested#" + String.join("|", parts);
+    }
+
+    private static String stringOrEmpty(String value) {
+        return value == null ? "" : value;
     }
 }

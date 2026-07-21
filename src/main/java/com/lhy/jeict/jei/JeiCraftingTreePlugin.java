@@ -17,7 +17,14 @@ public class JeiCraftingTreePlugin implements IModPlugin {
 
     @Override
     public void onRuntimeAvailable(IJeiRuntime jeiRuntime) {
+        RecipeTreeJeiLookup.clearCaches();
         JeiCraftingTreePlugin.jeiRuntime = jeiRuntime;
+    }
+
+    @Override
+    public void onRuntimeUnavailable() {
+        jeiRuntime = null;
+        RecipeTreeJeiLookup.clearCaches();
     }
 
     public static @Nullable IJeiRuntime getJeiRuntime() {

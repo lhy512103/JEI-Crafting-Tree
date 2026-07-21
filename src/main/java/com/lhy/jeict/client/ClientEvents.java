@@ -1,19 +1,22 @@
 package com.lhy.jeict.client;
 
 import net.neoforged.neoforge.client.event.InputEvent;
+import com.lhy.jeict.config.RecipeTreeKeyMappings;
 import net.neoforged.neoforge.client.event.RenderGuiEvent;
 import net.neoforged.neoforge.client.event.ScreenEvent;
+import net.minecraft.client.Minecraft;
 
 public final class ClientEvents {
     private ClientEvents() {
     }
 
-    public static void onRenderGuiPost(RenderGuiEvent.Post event) {
-        FloatingMaterialOverlayState.updateDrag();
-        FloatingMaterialOverlayState.render(event.getGuiGraphics());
+    public static void onKeyInput(InputEvent.Key event) {
+        if (event.getAction() == 1 && Minecraft.getInstance().screen != null) {
+            RecipeTreeKeyMappings.handle(Minecraft.getInstance().screen);
+        }
     }
 
-    public static void onScreenRenderPost(ScreenEvent.Render.Post event) {
+    public static void onRenderGuiPost(RenderGuiEvent.Post event) {
         FloatingMaterialOverlayState.updateDrag();
         FloatingMaterialOverlayState.render(event.getGuiGraphics());
     }

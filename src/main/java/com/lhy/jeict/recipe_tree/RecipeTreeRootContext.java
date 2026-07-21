@@ -1,5 +1,7 @@
 package com.lhy.jeict.recipe_tree;
 
+import com.lhy.jeict.config.RecipeTreeConfig;
+
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
@@ -18,30 +20,37 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
 
 public final class RecipeTreeRootContext {
-    private final RecipeTreeNodeViewModel root;
+    private final RecipeTreeNodeViewModel initialRoot;
     private final @Nullable Screen returnScreen;
+    private final RecipeTreeProjectManager projects;
     private boolean disableExistingPatternExpansion = true;
 
     public RecipeTreeRootContext(RecipeTreeNodeViewModel root, @Nullable Screen returnScreen) {
-        this.root = root;
+        this.initialRoot = root;
         this.returnScreen = returnScreen;
+        this.projects = new RecipeTreeProjectManager(root);
     }
 
     public RecipeTreeNodeViewModel root() {
-        return root;
+        RecipeTreeNodeViewModel active = projects.activeRoot();
+        return active == null ? initialRoot : active;
     }
 
     public @Nullable Screen returnScreen() {
         return returnScreen;
     }
 
+    public RecipeTreeProjectManager projects() {
+        return projects;
+    }
+
     public Component title() {
-        return root.recipe().title();
+        return root().recipe().title();
     }
 
     public List<RequestedIngredient> collectRequestedIngredients() {
         Map<String, RecipeTreeNodeViewModel.LeafAccumulator> merged = new LinkedHashMap<>();
-        root.collectLeavesMerged(1, merged);
+        root().collectLeavesMerged(1, merged);
         List<RequestedIngredient> requestedIngredients = new ArrayList<>(merged.size());
         for (RecipeTreeNodeViewModel.LeafAccumulator accumulator : merged.values()) {
             requestedIngredients.add(accumulator.toRequestedIngredient());
@@ -55,7 +64,7 @@ public final class RecipeTreeRootContext {
 
     public List<RequestedIngredient> collectSurplusIngredients(int rootCrafts) {
         Map<String, RecipeTreeNodeViewModel.LeafAccumulator> merged = new LinkedHashMap<>();
-        collectSurplusIngredients(root, Math.max(1, rootCrafts), merged);
+        collectSurplusIngredients(root(), Math.max(1, rootCrafts), merged);
         List<RequestedIngredient> surplus = new ArrayList<>(merged.size());
         for (RecipeTreeNodeViewModel.LeafAccumulator accumulator : merged.values()) {
             surplus.add(accumulator.toRequestedIngredient());
@@ -94,7 +103,7 @@ public final class RecipeTreeRootContext {
 
     public List<RecipeTreeRecipeViewModel> collectSelectedRecipes() {
         List<RecipeTreeRecipeViewModel> raw = new ArrayList<>();
-        collectSelectedRecipes(root, raw, java.util.Collections.newSetFromMap(new IdentityHashMap<>()));
+        collectSelectedRecipes(root(), raw, java.util.Collections.newSetFromMap(new IdentityHashMap<>()));
         List<RecipeTreeRecipeViewModel> unique = new ArrayList<>();
         List<RecipeTreeRecipeViewModel> recipesWithoutId = new ArrayList<>();
         Set<net.minecraft.resources.ResourceLocation> seenRecipeIds = new java.util.HashSet<>();
@@ -118,24 +127,53 @@ public final class RecipeTreeRootContext {
     }
 
     public void rememberSelection(String signature, RecipeTreeRecipeViewModel recipe) {
-        RecipeTreeClientMemory.rememberSelection(signature, recipe);
+        if (RecipeTreeConfig.REMEMBER_SELECTIONS.get()) RecipeTreeClientMemory.rememberSelection(signature, recipe);
     }
 
     public @Nullable RecipeTreeRecipeViewModel getRememberedSelection(String signature) {
-        return RecipeTreeClientMemory.getRememberedSelection(signature);
+        return RecipeTreeConfig.REMEMBER_SELECTIONS.get()
+                ? RecipeTreeClientMemory.getRememberedSelection(signature) : null;
     }
 
     public @Nullable RecipeTreeRecipeViewModel getRememberedSelection(String signature,
             @Nullable ITypedIngredient<?> outputFocus) {
-        return RecipeTreeClientMemory.getRememberedSelection(signature, outputFocus);
+        return RecipeTreeConfig.REMEMBER_SELECTIONS.get()
+                ? RecipeTreeClientMemory.getRememberedSelection(signature, outputFocus) : null;
     }
 
     public void forgetSelection(String signature) {
         RecipeTreeClientMemory.forgetSelection(signature);
     }
 
+
+    public void rememberSelection(RecipeTreeNodeViewModel parent, int inputIndex, RecipeTreeInputViewModel input,
+            String legacySignature, RecipeTreeRecipeViewModel recipe) {
+        if (!RecipeTreeConfig.REMEMBER_SELECTIONS.get()) return;
+        String scoped = com.lhy.jeict.client.RecipeTreeMemoryKey.of(parent, inputIndex, input, legacySignature);
+        RecipeTreeClientMemory.rememberSelection(scoped, recipe);
+    }
+
+    public @Nullable RecipeTreeRecipeViewModel getRememberedSelection(RecipeTreeNodeViewModel parent, int inputIndex,
+            RecipeTreeInputViewModel input, String legacySignature, @Nullable ITypedIngredient<?> outputFocus) {
+        if (!RecipeTreeConfig.REMEMBER_SELECTIONS.get()) return null;
+        String scoped = com.lhy.jeict.client.RecipeTreeMemoryKey.of(parent, inputIndex, input, legacySignature);
+        RecipeTreeRecipeViewModel selected = RecipeTreeClientMemory.getRememberedSelection(scoped, outputFocus);
+        if (selected != null) return selected;
+        // Legacy fallback transparently migrates the old unscoped properties entry on first successful read.
+        selected = RecipeTreeClientMemory.getRememberedSelection(legacySignature, outputFocus);
+        if (selected != null) RecipeTreeClientMemory.rememberSelection(scoped, selected);
+        return selected;
+    }
+
+    public void forgetSelection(RecipeTreeNodeViewModel parent, int inputIndex, RecipeTreeInputViewModel input,
+            String legacySignature) {
+        RecipeTreeClientMemory.forgetSelection(
+                com.lhy.jeict.client.RecipeTreeMemoryKey.of(parent, inputIndex, input, legacySignature));
+        RecipeTreeClientMemory.forgetSelection(legacySignature);
+    }
+
     public void rememberCollapsed(String signature) {
-        RecipeTreeClientMemory.rememberCollapsed(signature);
+        if (RecipeTreeConfig.REMEMBER_SELECTIONS.get()) RecipeTreeClientMemory.rememberCollapsed(signature);
     }
 
     public void forgetCollapsed(String signature) {
@@ -143,7 +181,31 @@ public final class RecipeTreeRootContext {
     }
 
     public boolean isCollapsed(String signature) {
-        return RecipeTreeClientMemory.isCollapsed(signature);
+        return RecipeTreeConfig.REMEMBER_SELECTIONS.get() && RecipeTreeClientMemory.isCollapsed(signature);
+    }
+
+    public void rememberCollapsed(RecipeTreeNodeViewModel parent, int inputIndex, RecipeTreeInputViewModel input,
+            String legacySignature) {
+        if (!RecipeTreeConfig.REMEMBER_SELECTIONS.get()) return;
+        RecipeTreeClientMemory.rememberCollapsed(
+                com.lhy.jeict.client.RecipeTreeMemoryKey.of(parent, inputIndex, input, legacySignature));
+    }
+
+    public void forgetCollapsed(RecipeTreeNodeViewModel parent, int inputIndex, RecipeTreeInputViewModel input,
+            String legacySignature) {
+        RecipeTreeClientMemory.forgetCollapsed(
+                com.lhy.jeict.client.RecipeTreeMemoryKey.of(parent, inputIndex, input, legacySignature));
+        RecipeTreeClientMemory.forgetCollapsed(legacySignature);
+    }
+
+    public boolean isCollapsed(RecipeTreeNodeViewModel parent, int inputIndex, RecipeTreeInputViewModel input,
+            String legacySignature) {
+        if (!RecipeTreeConfig.REMEMBER_SELECTIONS.get()) return false;
+        String scoped = com.lhy.jeict.client.RecipeTreeMemoryKey.of(parent, inputIndex, input, legacySignature);
+        if (RecipeTreeClientMemory.isCollapsed(scoped)) return true;
+        if (!RecipeTreeClientMemory.isCollapsed(legacySignature)) return false;
+        RecipeTreeClientMemory.rememberCollapsed(scoped);
+        return true;
     }
 
     public boolean disableExistingPatternExpansion() {

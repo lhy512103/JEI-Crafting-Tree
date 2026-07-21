@@ -7,6 +7,7 @@ import java.util.Map;
 
 import org.jetbrains.annotations.Nullable;
 
+import com.lhy.jeict.config.RecipeTreeConfig;
 import com.lhy.jeict.jei.JeiCraftingTreePlugin;
 import com.lhy.jeict.recipe_tree.RecipeTreeRootContext;
 import com.lhy.jeict.util.GenericIngredientUtil;
@@ -108,6 +109,7 @@ public final class FloatingMaterialOverlayState {
     }
 
     public static void render(GuiGraphics graphics) {
+        if (!RecipeTreeConfig.SHOW_FLOATING_MATERIALS.get()) return;
         if (!isInWorld()) {
             clear();
             return;

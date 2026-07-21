@@ -44,6 +44,37 @@ public interface CraftingTreeBackend {
      */
     boolean isCraftable(@Nullable Object rawIngredient);
 
+    /** Whether some pattern can produce this output, regardless of the currently selected route. */
+    default boolean isOutputCraftable(@Nullable Object rawIngredient) {
+        return isCraftable(rawIngredient);
+    }
+
+    /**
+     * Whether the exact selected JEI recipe has a matching encoded pattern.
+     *
+     * <p>The compatibility fallback preserves behavior for older integrations. New backends should compare
+     * {@link RecipeTreeRecipeViewModel#stableIdentity()} plus their own normalized input/output fingerprint.
+     */
+    default boolean hasExactPattern(RecipeTreeRecipeViewModel recipe) {
+        return recipe.primaryOutputIngredient() != null
+                && isCraftable(recipe.primaryOutputIngredient().getIngredient());
+    }
+
+    /** Stable backend-specific exact-pattern fingerprint, useful for diagnostics and caches. */
+    default String exactPatternFingerprint(RecipeTreeRecipeViewModel recipe) {
+        return recipe.stableIdentity();
+    }
+
+    /** Allows machine integrations to mark a slot as a returned container/tool/catalyst. */
+    default boolean isReusableInput(RecipeTreeRecipeViewModel recipe, int inputIndex) {
+        return false;
+    }
+
+    /** Machine identifier used by execution planning and machine-run summaries. */
+    default String machineId(RecipeTreeRecipeViewModel recipe) {
+        return recipe.subtitle() == null ? "crafting" : recipe.subtitle().getString();
+    }
+
     /** 每 tick 调用，返回 true 表示「已有样板」相关缓存发生变化，界面需刷新。 */
     default boolean pollExistingPatternCachesStale() {
         return false;
