@@ -39,6 +39,20 @@ The planning model is independent from AE2. Optional backends such as AE2 Utilit
 - Treats JEI catalyst slots and backend-declared reusable inputs as non-consumed requirements.
 - Distinguishes “this output is craftable” from “this exact selected recipe already has a matching pattern.”
 
+#### Editable AE2 pattern drafts
+
+When AE2 and a compatible backend such as AE2 Utility are installed, the node inspector includes a compact pattern editor based on AE2's native pattern-mode and slot textures. AE2 remains optional: the editor is not created or rendered when the integration is unavailable.
+
+- Creates one editable draft for each exact selected recipe and shares that draft across repeated occurrences of the same recipe.
+- Previews the exact inputs, primary output, secondary outputs, quantities, alternatives, and substitution state that will be sent for encoding.
+- Supports AE2 processing-pattern capacity of up to 81 input slots and 27 output slots through a paged 3×3 input / three-output viewport and scrollbar.
+- Allows processing slots to be replaced from the held item, cleared with right click, or assigned an exact amount with middle click or `Ctrl + wheel`.
+- Cycles legal JEI alternatives, promotes a secondary output to the primary output, removes unwanted byproducts, clears the processing draft, and restores the original recipe snapshot.
+- Keeps structured crafting drafts recipe-safe: their slots can cycle legal alternatives but cannot be freely removed, replaced, or assigned arbitrary amounts.
+- Shows dirty, invalid, removed-input, removed-output, and changed-primary-output states before encoding.
+- Uses the edited draft—not the immutable JEI recipe snapshot—for batch deduplication, validation, encoding, and upload.
+- Performs lightweight client checks first and requires the backend/server to validate slot limits, ingredients, quantities, and the primary output before consuming a blank pattern.
+
 #### Inventory allocation
 
 Built-in inventory coverage includes:
@@ -253,11 +267,28 @@ JEI Crafting Tree 是面向 Minecraft 1.21.1 / NeoForge 的 JEI 配方规划扩�
 - **计划报告**：集中展示基础原料、库存分配、余料/副产物、循环依赖、执行清单、机器运行次数和路线比较。
 - **精确已有样板判断**：区分“该输出可合成”和“当前选中的精确配方已有样板”；禁用已有样板展开后，会立即折叠已展开分支，并阻止手动选择、配方记忆或唯一配方逻辑再次展开。
 - **搜索与定位**：支持材料、配方、`@模组`、`#机器` 搜索，Enter 定位下一个结果；安装 Just Enough Characters 后兼容其拼音匹配规则。
-- **节点详情与样板预览**：右键节点可查看材料、数量、机器和已有样板状态。安装 AE2 时，详情面板直接使用 AE2 原生样板终端背景与槽位，按 3×3 输入槽和输出槽预览编码内容、数量、催化剂及概率产物；未安装 AE2 时不创建也不绘制该预览区域。
+- **节点详情与样板草稿编辑**：右键节点可查看材料、数量、机器和已有样板状态。安装 AE2 与兼容后端后，详情面板使用 AE2 原生样板模式背景、槽位和控制图标，直接编辑最终要写入样板的输入、输出、数量与替换状态；未安装 AE2 时不创建也不绘制该区域。
 - **配方记忆**：按父配方、节点路径、输入槽、材料身份、服务器/世界和整合包指纹隔离记忆，并兼容迁移旧记录。
 - **撤销与重做**：覆盖配方选择、展开/折叠、替代材料和项目管理操作，最多保存 64 个会话内快照。
 - **悬浮材料面板**：可固定材料清单，在其他界面中继续查看并跳转 JEI 配方或用途。
 - **外部后端 API**：支持存储网络、精确样板、编码、上传、机器统计和库存来源扩展。
+
+### AE2 样板草稿编辑
+
+节点详情中的样板区不是只读预览，而是批量编码与上传使用的最终草稿：
+
+- 相同精确配方在树中多次出现时共享同一份草稿，任一位置的修改都会同步生效；
+- 处理样板支持最多 81 个输入槽和 27 个输出槽，通过 3×3 输入、三个输出的可滚动视窗编辑；
+- 左键可轮换 JEI 提供的合法备选原料，手持物品时可填入或替换处理样板槽位；
+- 右键可清除处理样板槽位，中键可输入精确数量，`Ctrl + 滚轮` 可快速调整数量；
+- 可切换主要输出、把次要输出提升为主输出、删除不需要的副产物、清空草稿并恢复原始配方；
+- 可单独设置物品替换、流体替换和输入顺序保留状态；
+- 合成、锻造和切石等结构化配方保持配方安全，只允许切换合法备选，不允许自由删除、替换或修改数量；
+- 编辑器会明确提示草稿已修改、无效、删除输入、删除输出或主要输出变化；
+- 批量收集按最终草稿指纹去重，编码和上传严格使用草稿内容，不会退回未修改的 JEI 配方快照；
+- 客户端先执行轻量校验，兼容后端与服务端还会再次检查槽位上限、材料类型、数量和主要输出，校验失败时不会消耗空白样板。
+
+删除副产物只影响最终编码草稿，不会篡改配方树用于材料规划的真实产出与余料语义。
 
 ### 全局计划规则
 

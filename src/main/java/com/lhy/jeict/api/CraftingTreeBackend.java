@@ -91,6 +91,36 @@ public interface CraftingTreeBackend {
     /** 一键编码并上传到供应器（上传模式）。返回 true 表示已开始上传、界面应关闭。 */
     boolean uploadPatterns(List<RecipeTreeRecipeViewModel> selectedRecipes);
 
+    /** Whether this backend can encode exact user-edited pattern drafts. */
+    default boolean supportsEditablePatternDrafts() {
+        return false;
+    }
+
+    /** Resolves the AE2 pattern mode for a JEI recipe without exposing AE2 classes to JEICT. */
+    default PatternEncodingMode patternMode(RecipeTreeRecipeViewModel recipe) {
+        return PatternEncodingMode.PROCESSING;
+    }
+
+    /** Backend-specific validation messages. Empty means no additional error. */
+    default List<Component> validatePatternDraft(PatternEncodingRequest request) {
+        return List.of();
+    }
+
+    /** Exact-pattern check using the edited draft instead of the immutable JEI recipe snapshot. */
+    default boolean hasExactPatternDraft(PatternEncodingRequest request) {
+        return hasExactPattern(request.recipe());
+    }
+
+    /** Encode the exact edited drafts. Older backends retain the legacy recipe-only behavior. */
+    default boolean encodePatternDrafts(List<PatternEncodingRequest> requests) {
+        return encodePatterns(requests.stream().map(PatternEncodingRequest::recipe).toList());
+    }
+
+    /** Upload the exact edited drafts. Older backends retain the legacy recipe-only behavior. */
+    default boolean uploadPatternDrafts(List<PatternEncodingRequest> requests) {
+        return uploadPatterns(requests.stream().map(PatternEncodingRequest::recipe).toList());
+    }
+
     // ---- AE2 替换开关 UI（图标取自 AE2，故由后端渲染） ----
 
     default boolean itemSubstituteOn() {

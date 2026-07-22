@@ -24,6 +24,10 @@ import com.lhy.jeict.recipe_tree.RecipeTreeRootContext;
 import com.lhy.jeict.recipe_tree.RecipeTreeSearchIndex;
 import com.lhy.jeict.api.CraftingTreeBackend;
 import com.lhy.jeict.api.CraftingTreeBackends;
+import com.lhy.jeict.api.PatternEncodingDraft;
+import com.lhy.jeict.api.PatternEncodingMode;
+import com.lhy.jeict.api.PatternEncodingRequest;
+import com.lhy.jeict.api.PatternEncodingSlot;
 import com.lhy.jeict.debug.RecipeTreePerfDebug;
 import com.lhy.jeict.jei.JeiCraftingTreePlugin;
 import com.lhy.jeict.jei.RecipeTreeJeiLookup;
@@ -77,14 +81,17 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private static final int SETTINGS_COLLAPSED_WIDTH = 34;
     private static final int BATCH_TEXT_GAP = 3;
     private static final boolean AE2_LOADED = ModList.get().isLoaded("ae2");
-    private static final ResourceLocation AE2_PATTERN_TERMINAL_TEXTURE =
-            ResourceLocation.fromNamespaceAndPath("ae2", "textures/guis/pattern.png");
-    private static final int AE2_PATTERN_PANEL_SRC_X = 7;
-    private static final int AE2_PATTERN_PANEL_SRC_Y = 85;
-    private static final int AE2_PATTERN_PANEL_WIDTH = 126;
-    private static final int AE2_PATTERN_PANEL_HEIGHT = 63;
-    private static final int AE2_SLOT_SRC_X = 7;
-    private static final int AE2_SLOT_SRC_Y = 17;
+    private static final ResourceLocation AE2_PATTERN_MODES_TEXTURE =
+            ResourceLocation.fromNamespaceAndPath("ae2", "textures/guis/pattern_modes.png");
+    private static final ResourceLocation AE2_STATES_TEXTURE =
+            ResourceLocation.fromNamespaceAndPath("ae2", "textures/guis/states.png");
+    private static final int AE2_PATTERN_PANEL_SRC_X = 0;
+    private static final int AE2_CRAFTING_PANEL_SRC_Y = 0;
+    private static final int AE2_PROCESSING_PANEL_SRC_Y = 70;
+    private static final int AE2_PATTERN_PANEL_WIDTH = 124;
+    private static final int AE2_PATTERN_PANEL_HEIGHT = 66;
+    private static final int AE2_SLOT_SRC_X = 192;
+    private static final int AE2_SLOT_SRC_Y = 192;
 
     private final RecipeTreeRootContext context;
     private final Screen returnScreen;
@@ -113,10 +120,14 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private final List<AlternativeButtonBounds> alternativeButtonBounds = new ArrayList<>();
     private final List<AlternativeOptionBounds> alternativeOptionBounds = new ArrayList<>();
     private final List<LayerMaterialBounds> layerMaterialBounds = new ArrayList<>();
-    /** Inspector-only slot hit boxes; bounded to 12 entries and rebuilt during panel rendering. */
-    private final List<PatternPreviewSlotBounds> inspectorPatternSlotBounds = new ArrayList<>(12);
-    private @Nullable RecipeTreeRecipeViewModel cachedPatternPreviewRecipe;
-    private PatternPreview cachedPatternPreview = PatternPreview.EMPTY;
+    /** Only the currently visible 9 input and 3 output slots receive hit boxes. */
+    private final List<PatternDraftSlotBounds> inspectorPatternSlotBounds = new ArrayList<>(12);
+    private final List<PatternControlBounds> inspectorPatternControlBounds = new ArrayList<>(8);
+    private final Map<String, PatternEncodingDraft> patternDrafts = new HashMap<>();
+    private int patternDraftScroll;
+    private @Nullable String lastInspectorDraftIdentity;
+    private @Nullable EditBox patternAmountEditor;
+    private @Nullable PatternDraftSlotBounds patternAmountEditTarget;
     private @Nullable TopMaterialsPinButtonBounds topMaterialsPinButtonBounds;
     private List<RequestedIngredient> topMaterials = List.of();
     private List<RequestedIngredient> surplusMaterials = List.of();
@@ -304,6 +315,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 Component.translatable("gui.jeict.recipe_tree.encode"), btn -> encodePatterns());
         this.uploadButton = chromeButton(this.width / 2 + 4, this.height - 26, 70, 20,
                 Component.translatable("gui.jeict.recipe_tree.upload"), btn -> uploadPatterns());
+        this.patternAmountEditor = new EditBox(this.font, 0, 0, 88, 18,
+                Component.translatable("gui.jeict.recipe_tree.pattern_amount"));
+        this.patternAmountEditor.setMaxLength(19);
+        this.patternAmountEditor.setFilter(value -> value.isEmpty() || value.chars().allMatch(Character::isDigit));
+        this.patternAmountEditor.visible = false;
 
         this.addRenderableWidget(backButton);
         this.addRenderableWidget(searchBox);
@@ -326,6 +342,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         this.addRenderableWidget(fluidSubstitutionButton);
         this.addRenderableWidget(encodeButton);
         this.addRenderableWidget(uploadButton);
+        this.addRenderableWidget(patternAmountEditor);
         syncComputeQuantitiesButton();
         syncStyleButton();
         syncToggleExistingPatternButton();
@@ -1903,6 +1920,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
 
     private void renderInspectorPanel(GuiGraphics graphics, RecipeTreeTheme.Palette theme) {
         inspectorPatternSlotBounds.clear();
+        inspectorPatternControlBounds.clear();
         if (!hasInspectorSelection() || this.width < 520) {
             return;
         }
@@ -1960,42 +1978,35 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             textY += 15;
         }
 
-        if (AE2_LOADED) {
+        CraftingTreeBackend patternBackend = CraftingTreeBackends.get();
+        if (AE2_LOADED && patternBackend != null && patternBackend.supportsEditablePatternDrafts()) {
             graphics.fill(left, textY + 3, right, textY + 4, theme.gridMajorLine());
             textY += 11;
-            graphics.drawString(this.font, Component.translatable("gui.jeict.recipe_tree.pattern_preview"),
-                    left, textY, theme.titleText(), false);
+            PatternEncodingDraft draft = previewRecipe == null ? null : patternDraftFor(previewRecipe);
+            Component heading = draft != null && draft.isDirty()
+                    ? Component.translatable("gui.jeict.recipe_tree.pattern_editor_dirty").withStyle(ChatFormatting.GOLD)
+                    : Component.translatable("gui.jeict.recipe_tree.pattern_editor");
+            graphics.drawString(this.font, heading, left, textY, theme.titleText(), false);
             textY += 14;
-            if (previewRecipe == null) {
+            if (draft == null) {
                 graphics.drawString(this.font,
                         trimToWidth(Component.translatable("gui.jeict.recipe_tree.pattern_preview_empty"), right - left),
                         left, textY, theme.hintText(), false);
                 textY += 18;
             } else {
-                PatternPreview preview = patternPreviewFor(previewRecipe);
+                if (!draft.sourceRecipeIdentity().equals(lastInspectorDraftIdentity)) {
+                    lastInspectorDraftIdentity = draft.sourceRecipeIdentity();
+                    patternDraftScroll = 0;
+                    closePatternAmountEditor(false);
+                }
                 int panelX = left;
                 int panelY = textY;
-                renderAe2PatternPreviewBackground(graphics, panelX, panelY);
-                int inputX = panelX + 17;
-                int inputY = panelY + 5;
-                int outputX = panelX + 102;
-                for (int i = 0; i < preview.inputs().size(); i++) {
-                    int x = inputX + (i % 3) * 18;
-                    int y = inputY + (i / 3) * 18;
-                    renderPatternPreviewSlot(graphics, preview.inputs().get(i), x, y);
-                }
-                for (int i = 0; i < preview.outputs().size(); i++) {
-                    renderPatternPreviewSlot(graphics, preview.outputs().get(i), outputX, inputY + i * 18);
-                }
-                if (preview.extraInputs() > 0) {
-                    graphics.drawString(this.font, Component.literal("+" + preview.extraInputs()), inputX + 57,
-                            inputY + 39, theme.hintText(), false);
-                }
-                if (preview.extraOutputs() > 0) {
-                    graphics.drawString(this.font, Component.literal("+" + preview.extraOutputs()), outputX + 20,
-                            inputY + 39, theme.hintText(), false);
-                }
-                textY = panelY + AE2_PATTERN_PANEL_HEIGHT + 4;
+                renderAe2PatternDraft(graphics, draft, panelX, panelY, theme);
+                textY = panelY + AE2_PATTERN_PANEL_HEIGHT + 18;
+                Component state = patternDraftValidationState(draft);
+                graphics.drawString(this.font, trimToWidth(state, right - left), left, textY,
+                        isPatternDraftValid(draft) ? (draft.isDirty() ? theme.partial() : theme.success()) : theme.danger(), false);
+                textY += 13;
             }
         }
         graphics.fill(left, textY, right, textY + 1, theme.gridMajorLine());
@@ -2013,42 +2024,128 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         return null;
     }
 
-    private PatternPreview patternPreviewFor(RecipeTreeRecipeViewModel recipe) {
-        if (cachedPatternPreviewRecipe == recipe) {
-            return cachedPatternPreview;
-        }
-        List<PatternPreviewSlot> inputs = new ArrayList<>(Math.min(9, recipe.inputs().size()));
-        for (int i = 0; i < Math.min(9, recipe.inputs().size()); i++) {
-            inputs.add(PatternPreviewSlot.input(recipe.inputs().get(i)));
-        }
-        List<PatternPreviewSlot> outputs = new ArrayList<>(Math.min(3, recipe.outputs().size()));
-        for (int i = 0; i < Math.min(3, recipe.outputs().size()); i++) {
-            outputs.add(PatternPreviewSlot.output(recipe.outputs().get(i)));
-        }
-        cachedPatternPreviewRecipe = recipe;
-        cachedPatternPreview = new PatternPreview(List.copyOf(inputs), List.copyOf(outputs),
-                Math.max(0, recipe.inputs().size() - inputs.size()),
-                Math.max(0, recipe.outputs().size() - outputs.size()));
-        return cachedPatternPreview;
+    private PatternEncodingDraft patternDraftFor(RecipeTreeRecipeViewModel recipe) {
+        return patternDrafts.computeIfAbsent(recipe.stableIdentity(), ignored -> {
+            CraftingTreeBackend backend = CraftingTreeBackends.get();
+            PatternEncodingMode mode = backend == null ? PatternEncodingMode.PROCESSING : backend.patternMode(recipe);
+            boolean itemSubstitution = backend != null && backend.itemSubstituteOn();
+            boolean fluidSubstitution = backend != null && backend.fluidSubstituteOn();
+            return PatternEncodingDraft.fromRecipe(recipe, mode, itemSubstitution, fluidSubstitution);
+        });
     }
 
-    private void renderAe2PatternPreviewBackground(GuiGraphics graphics, int x, int y) {
-        graphics.blit(AE2_PATTERN_TERMINAL_TEXTURE, x, y,
-                AE2_PATTERN_PANEL_SRC_X, AE2_PATTERN_PANEL_SRC_Y,
+    private void resetPatternDraft(RecipeTreeRecipeViewModel recipe) {
+        CraftingTreeBackend backend = CraftingTreeBackends.get();
+        PatternEncodingMode mode = backend == null ? PatternEncodingMode.PROCESSING : backend.patternMode(recipe);
+        patternDrafts.put(recipe.stableIdentity(), PatternEncodingDraft.fromRecipe(recipe, mode,
+                backend != null && backend.itemSubstituteOn(), backend != null && backend.fluidSubstituteOn()));
+        existingPatternRecipeCache.remove(recipe);
+        patternDraftScroll = 0;
+        closePatternAmountEditor(false);
+    }
+
+    private void renderAe2PatternDraft(GuiGraphics graphics, PatternEncodingDraft draft, int x, int y,
+            RecipeTreeTheme.Palette theme) {
+        boolean crafting = draft.mode() == PatternEncodingMode.CRAFTING;
+        graphics.blit(AE2_PATTERN_MODES_TEXTURE, x, y, AE2_PATTERN_PANEL_SRC_X,
+                crafting ? AE2_CRAFTING_PANEL_SRC_Y : AE2_PROCESSING_PANEL_SRC_Y,
                 AE2_PATTERN_PANEL_WIDTH, AE2_PATTERN_PANEL_HEIGHT, 256, 256);
+
+        int slotY = y + 6;
+        int inputX = x + (crafting ? 7 : 17);
+        int outputX = x + (crafting ? 98 : 102);
+        for (int visible = 0; visible < PatternEncodingDraft.VISIBLE_INPUTS; visible++) {
+            int slotIndex = crafting ? visible : patternDraftScroll * 3 + visible;
+            int slotX = inputX + (visible % 3) * 18;
+            int visibleY = slotY + (visible / 3) * 18;
+            renderPatternDraftSlot(graphics, draft.input(slotIndex), slotX, visibleY, true, slotIndex);
+        }
+        if (crafting) {
+            renderPatternDraftSlot(graphics, draft.output(0), outputX, slotY + 18, false, 0);
+        } else {
+            for (int visible = 0; visible < PatternEncodingDraft.VISIBLE_OUTPUTS; visible++) {
+                int slotIndex = patternDraftScroll + visible;
+                renderPatternDraftSlot(graphics, draft.output(slotIndex), outputX, slotY + visible * 18, false, slotIndex);
+            }
+        }
+
+        if (crafting) {
+            // The original AE2 crafting panel has no output-cycle or scrollbar control. Clearing is intentionally
+            // omitted here because structured drafts cannot be repopulated freely without JEI ghost transfer.
+            renderPatternSmallControl(graphics, x + 72, y + 7,
+                    draft.substituteItems() ? 224 : 232, 208, PatternControl.ITEM_SUBSTITUTION);
+            renderPatternSmallControl(graphics, x + 82, y + 7,
+                    draft.substituteFluids() ? 224 : 232, 216, PatternControl.FLUID_SUBSTITUTION);
+        } else {
+            renderPatternSmallControl(graphics, x + 71, y + 7, 224, 200, PatternControl.CLEAR);
+            renderPatternSmallControl(graphics, x + 90, y + 7, 232, 200, PatternControl.CYCLE_OUTPUT);
+            renderPatternSmallControl(graphics, x + 73, y + 42,
+                    draft.substituteItems() ? 224 : 232, 208, PatternControl.ITEM_SUBSTITUTION);
+            renderPatternSmallControl(graphics, x + 84, y + 42,
+                    draft.substituteFluids() ? 224 : 232, 216, PatternControl.FLUID_SUBSTITUTION);
+        }
+        inspectorPatternControlBounds.add(new PatternControlBounds(PatternControl.RESET, x + 126, y + 5, 54, 16));
+        inspectorPatternControlBounds.add(new PatternControlBounds(PatternControl.PRESERVE_ORDER, x + 126, y + 24, 54, 16));
+        RecipeTreeTheme.drawButton(graphics, x + 126, y + 5, 54, 16, false, true);
+        RecipeTreeTheme.drawButton(graphics, x + 126, y + 24, 54, 16, false, true);
+        graphics.drawCenteredString(this.font, Component.translatable("gui.jeict.recipe_tree.pattern_reset"), x + 153, y + 9,
+                theme.titleText());
+        graphics.drawCenteredString(this.font, Component.translatable(draft.preserveInputOrder()
+                ? "gui.jeict.recipe_tree.pattern_order_on" : "gui.jeict.recipe_tree.pattern_order_off"), x + 153, y + 28,
+                theme.titleText());
+
+        if (!crafting) {
+            int trackX = x + 7;
+            int trackY = y + 7;
+            int trackHeight = 52;
+            int maxScroll = maxPatternDraftScroll(draft);
+            int thumbY = trackY + (maxScroll <= 0 ? 0 : Math.round((trackHeight - 10) * (patternDraftScroll / (float) maxScroll)));
+            graphics.fill(trackX, trackY, trackX + 6, trackY + trackHeight, 0x66000000);
+            graphics.fill(trackX + 1, thumbY, trackX + 5, thumbY + 10, 0xFFB8BDCE);
+            inspectorPatternControlBounds.add(new PatternControlBounds(PatternControl.SCROLLBAR, trackX, trackY, 6, trackHeight));
+        }
     }
 
-    private void renderPatternPreviewSlot(GuiGraphics graphics, PatternPreviewSlot slot, int x, int y) {
-        graphics.blit(AE2_PATTERN_TERMINAL_TEXTURE, x, y,
-                AE2_SLOT_SRC_X, AE2_SLOT_SRC_Y, 18, 18, 256, 256);
-        ITypedIngredient<?> ingredient = slot.ingredient();
-        renderIngredientAt(graphics, ingredient, x + 1, y + 1);
-        String overlay = slot.overlayAmount();
-        if (!overlay.isBlank()) {
-            int textWidth = this.font.width(overlay);
-            graphics.drawString(this.font, overlay, x + 17 - textWidth, y + 9, 0xFFFFFFFF, true);
+    private void renderPatternSmallControl(GuiGraphics graphics, int x, int y, int srcX, int srcY,
+            PatternControl control) {
+        graphics.blit(AE2_STATES_TEXTURE, x, y, srcX, srcY, 8, 8, 256, 256);
+        inspectorPatternControlBounds.add(new PatternControlBounds(control, x, y, 8, 8));
+    }
+
+    private void renderPatternDraftSlot(GuiGraphics graphics, @Nullable PatternEncodingSlot slot, int x, int y,
+            boolean input, int index) {
+        graphics.blit(AE2_STATES_TEXTURE, x, y, AE2_SLOT_SRC_X, AE2_SLOT_SRC_Y, 18, 18, 256, 256);
+        if (slot != null) {
+            renderIngredientAt(graphics, slot.ingredient(), x + 1, y + 1);
+            String overlay = slot.amount() <= 1L ? "" : formatCompactCount(slot.amount());
+            if (!overlay.isBlank()) {
+                int textWidth = this.font.width(overlay);
+                graphics.drawString(this.font, overlay, x + 17 - textWidth, y + 9, 0xFFFFFFFF, true);
+            }
         }
-        inspectorPatternSlotBounds.add(new PatternPreviewSlotBounds(slot, x, y, 18, 18));
+        inspectorPatternSlotBounds.add(new PatternDraftSlotBounds(input, index, slot, x, y, 18, 18));
+    }
+
+    private int maxPatternDraftScroll(PatternEncodingDraft draft) {
+        if (draft.mode() == PatternEncodingMode.CRAFTING) return 0;
+        int inputRows = Math.max(3, (draft.inputs().size() + 2) / 3);
+        int outputRows = Math.max(3, draft.outputs().size());
+        return Math.max(0, Math.min(24, Math.max(inputRows, outputRows) - 3));
+    }
+
+    private boolean isPatternDraftValid(PatternEncodingDraft draft) {
+        boolean hasInput = draft.inputs().stream().anyMatch(slot -> slot != null && slot.ingredient() != null && slot.amount() > 0);
+        boolean hasOutput = draft.output(0) != null && draft.output(0).ingredient() != null && draft.output(0).amount() > 0;
+        return hasInput && hasOutput;
+    }
+
+    private Component patternDraftValidationState(PatternEncodingDraft draft) {
+        if (!isPatternDraftValid(draft)) return Component.translatable("gui.jeict.recipe_tree.pattern_invalid");
+        if (draft.hasRemovedSourceInput()) return Component.translatable("gui.jeict.recipe_tree.pattern_input_removed");
+        if (draft.hasRemovedSourceOutput()) return Component.translatable("gui.jeict.recipe_tree.pattern_output_removed");
+        if (draft.primaryOutputChanged()) return Component.translatable("gui.jeict.recipe_tree.pattern_primary_changed");
+        return Component.translatable(draft.isDirty()
+                ? "gui.jeict.recipe_tree.pattern_modified" : "gui.jeict.recipe_tree.pattern_ready");
     }
 
     private void renderFooterStatus(GuiGraphics graphics, RecipeTreeTheme.Palette theme) {
@@ -3010,23 +3107,32 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     private void renderTooltip(GuiGraphics graphics, double logicalMouseX, double logicalMouseY, int mouseX, int mouseY) {
-        for (PatternPreviewSlotBounds bounds : inspectorPatternSlotBounds) {
+        for (PatternDraftSlotBounds bounds : inspectorPatternSlotBounds) {
             if (bounds.contains(mouseX, mouseY)) {
-                List<Component> lines = new ArrayList<>(ingredientTooltipLines(bounds.slot().ingredient()));
+                PatternEncodingSlot slot = bounds.slot();
+                List<Component> lines = slot == null
+                        ? new ArrayList<>()
+                        : new ArrayList<>(ingredientTooltipLines(slot.ingredient()));
                 if (lines.isEmpty()) {
-                    lines.add(Component.translatable("gui.jeict.recipe_tree.pattern_preview_slot"));
+                    lines.add(Component.translatable("gui.jeict.recipe_tree.pattern_empty_slot"));
                 }
-                lines.add(Component.translatable("gui.jeict.recipe_tree.pattern_slot_amount", bounds.slot().exactAmount())
-                        .withStyle(ChatFormatting.GRAY));
-                if (!bounds.slot().consumed()) {
-                    lines.add(Component.translatable("gui.jeict.recipe_tree.pattern_slot_reusable")
-                            .withStyle(ChatFormatting.AQUA));
+                if (slot != null) {
+                    lines.add(Component.translatable("gui.jeict.recipe_tree.pattern_slot_amount", slot.amount())
+                            .withStyle(ChatFormatting.GRAY));
+                    if (slot.hasAlternatives()) {
+                        lines.add(Component.translatable("gui.jeict.recipe_tree.pattern_cycle_alternative")
+                                .withStyle(ChatFormatting.AQUA));
+                    }
                 }
-                if (bounds.slot().chance() < 1.0D) {
-                    lines.add(Component.translatable("gui.jeict.recipe_tree.pattern_slot_chance",
-                            Math.round(bounds.slot().chance() * 100.0D)).withStyle(ChatFormatting.GRAY));
-                }
+                lines.add(Component.translatable("gui.jeict.recipe_tree.pattern_slot_controls")
+                        .withStyle(ChatFormatting.DARK_GRAY));
                 graphics.renderTooltip(this.font, lines, Optional.empty(), mouseX, mouseY);
+                return;
+            }
+        }
+        for (PatternControlBounds bounds : inspectorPatternControlBounds) {
+            if (bounds.contains(mouseX, mouseY)) {
+                graphics.renderTooltip(this.font, List.of(patternControlTooltip(bounds.control())), Optional.empty(), mouseX, mouseY);
                 return;
             }
         }
@@ -3294,8 +3400,157 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         }
     }
 
+    private boolean handlePatternDraftSlotClick(PatternDraftSlotBounds bounds, int button) {
+        RecipeTreeRecipeViewModel recipe = selectedInspectorRecipe();
+        if (recipe == null) return false;
+        PatternEncodingDraft draft = patternDraftFor(recipe);
+        boolean protectedCraftingSlot = draft.mode() == PatternEncodingMode.CRAFTING;
+        if (button == 1) {
+            if (!protectedCraftingSlot) {
+                if (bounds.input()) draft.setInput(bounds.index(), null);
+                else draft.setOutput(bounds.index(), null);
+                markPatternDraftChanged(recipe);
+            }
+            return true;
+        }
+        if (button == 2) {
+            if (bounds.slot() != null && !protectedCraftingSlot) openPatternAmountEditor(bounds);
+            return true;
+        }
+        if (button != 0) return false;
+
+        if (!bounds.input() && Screen.hasShiftDown() && bounds.index() > 0 && bounds.slot() != null) {
+            draft.promoteOutput(bounds.index());
+            markPatternDraftChanged(recipe);
+            return true;
+        }
+
+        ItemStack replacement = Minecraft.getInstance().player == null
+                ? ItemStack.EMPTY : Minecraft.getInstance().player.getMainHandItem();
+        if (!replacement.isEmpty() && (bounds.slot() == null || Screen.hasShiftDown()) && !protectedCraftingSlot) {
+            var runtime = JeiCraftingTreePlugin.getJeiRuntime();
+            ITypedIngredient<?> typed = runtime == null ? null
+                    : runtime.getIngredientManager().createTypedIngredient(replacement.copyWithCount(1), true).orElse(null);
+            if (typed != null) {
+                PatternEncodingSlot replacementSlot = new PatternEncodingSlot(List.of(typed),
+                        bounds.slot() == null ? Math.max(1, replacement.getCount()) : bounds.slot().amount());
+                if (bounds.input()) draft.setInput(bounds.index(), replacementSlot);
+                else draft.setOutput(bounds.index(), replacementSlot);
+                markPatternDraftChanged(recipe);
+            }
+            return true;
+        }
+        if (bounds.slot() != null && bounds.slot().hasAlternatives()) {
+            bounds.slot().cycleAlternative(1);
+            markPatternDraftChanged(recipe);
+        }
+        return true;
+    }
+
+    private boolean handlePatternControlClick(PatternControlBounds bounds, double mouseY) {
+        RecipeTreeRecipeViewModel recipe = selectedInspectorRecipe();
+        if (recipe == null) return false;
+        PatternEncodingDraft draft = patternDraftFor(recipe);
+        switch (bounds.control()) {
+            case CLEAR -> draft.clear();
+            case CYCLE_OUTPUT -> draft.cyclePrimaryOutput();
+            case ITEM_SUBSTITUTION -> draft.setSubstituteItems(!draft.substituteItems());
+            case FLUID_SUBSTITUTION -> draft.setSubstituteFluids(!draft.substituteFluids());
+            case RESET -> {
+                resetPatternDraft(recipe);
+                return true;
+            }
+            case PRESERVE_ORDER -> draft.setPreserveInputOrder(!draft.preserveInputOrder());
+            case SCROLLBAR -> {
+                int max = maxPatternDraftScroll(draft);
+                double fraction = Math.max(0.0D, Math.min(1.0D, (mouseY - bounds.y() - 5.0D) / Math.max(1.0D, bounds.height() - 10.0D)));
+                patternDraftScroll = (int) Math.round(fraction * max);
+                return true;
+            }
+        }
+        markPatternDraftChanged(recipe);
+        return true;
+    }
+
+    private void markPatternDraftChanged(@Nullable RecipeTreeRecipeViewModel recipe) {
+        if (recipe != null) existingPatternRecipeCache.remove(recipe);
+    }
+
+    private void openPatternAmountEditor(PatternDraftSlotBounds bounds) {
+        if (patternAmountEditor == null || bounds.slot() == null) return;
+        patternAmountEditTarget = bounds;
+        patternAmountEditor.setX(Math.max(8, Math.min(this.width - 96, bounds.x() - 35)));
+        patternAmountEditor.setY(Math.max(8, Math.min(this.height - 22, bounds.y() + 20)));
+        patternAmountEditor.setValue(Long.toString(bounds.slot().amount()));
+        patternAmountEditor.visible = true;
+        patternAmountEditor.setFocused(true);
+        patternAmountEditor.moveCursorToEnd(false);
+        this.setFocused(patternAmountEditor);
+    }
+
+    private void commitPatternAmountEditor() {
+        if (patternAmountEditor == null || patternAmountEditTarget == null) {
+            closePatternAmountEditor(false);
+            return;
+        }
+        try {
+            long amount = Long.parseLong(patternAmountEditor.getValue());
+            RecipeTreeRecipeViewModel recipe = selectedInspectorRecipe();
+            if (amount > 0 && recipe != null) {
+                PatternEncodingDraft draft = patternDraftFor(recipe);
+                PatternEncodingSlot slot = patternAmountEditTarget.input()
+                        ? draft.input(patternAmountEditTarget.index()) : draft.output(patternAmountEditTarget.index());
+                if (slot != null) {
+                    slot.setAmount(amount);
+                    markPatternDraftChanged(recipe);
+                }
+            }
+        } catch (NumberFormatException ignored) {
+        }
+        closePatternAmountEditor(true);
+    }
+
+    private void closePatternAmountEditor(boolean keepValue) {
+        if (patternAmountEditor != null) {
+            patternAmountEditor.visible = false;
+            patternAmountEditor.setFocused(false);
+            if (!keepValue) patternAmountEditor.setValue("");
+        }
+        patternAmountEditTarget = null;
+        if (this.getFocused() == patternAmountEditor) this.setFocused(null);
+    }
+
+    private Component patternControlTooltip(PatternControl control) {
+        return Component.translatable(switch (control) {
+            case CLEAR -> "gui.jeict.recipe_tree.pattern_clear";
+            case CYCLE_OUTPUT -> "gui.jeict.recipe_tree.pattern_cycle_output";
+            case ITEM_SUBSTITUTION -> "gui.jeict.recipe_tree.pattern_item_substitution";
+            case FLUID_SUBSTITUTION -> "gui.jeict.recipe_tree.pattern_fluid_substitution";
+            case RESET -> "gui.jeict.recipe_tree.pattern_reset_tooltip";
+            case PRESERVE_ORDER -> "gui.jeict.recipe_tree.pattern_order_tooltip";
+            case SCROLLBAR -> "gui.jeict.recipe_tree.pattern_scroll";
+        });
+    }
+
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (patternAmountEditor != null && patternAmountEditor.visible
+                && patternAmountEditor.isMouseOver(mouseX, mouseY)) {
+            return super.mouseClicked(mouseX, mouseY, button);
+        }
+        for (PatternDraftSlotBounds bounds : inspectorPatternSlotBounds) {
+            if (bounds.contains(mouseX, mouseY) && handlePatternDraftSlotClick(bounds, button)) {
+                return true;
+            }
+        }
+        for (PatternControlBounds bounds : inspectorPatternControlBounds) {
+            if (bounds.contains(mouseX, mouseY) && handlePatternControlClick(bounds, mouseY)) {
+                return true;
+            }
+        }
+        if (patternAmountEditor != null && patternAmountEditor.visible) {
+            commitPatternAmountEditor();
+        }
         if (button == 0 && isPointInsideBatchBadge(mouseX, mouseY)) {
             return true;
         }
@@ -3582,6 +3837,23 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        PatternEncodingDraft hoveredDraft = selectedInspectorRecipe() == null ? null : patternDraftFor(selectedInspectorRecipe());
+        if (hoveredDraft != null && (inspectorPatternSlotBounds.stream().anyMatch(bounds -> bounds.contains(mouseX, mouseY))
+                || inspectorPatternControlBounds.stream().anyMatch(bounds -> bounds.contains(mouseX, mouseY)))) {
+            int direction = -(int) Math.signum(scrollY);
+            if (Screen.hasControlDown()) {
+                PatternDraftSlotBounds slotBounds = inspectorPatternSlotBounds.stream()
+                        .filter(bounds -> bounds.contains(mouseX, mouseY)).findFirst().orElse(null);
+                if (slotBounds != null && slotBounds.slot() != null && hoveredDraft.mode() != PatternEncodingMode.CRAFTING) {
+                    long step = Screen.hasShiftDown() ? 64L : 1L;
+                    slotBounds.slot().setAmount(Math.max(1L, slotBounds.slot().amount() + direction * step));
+                    markPatternDraftChanged(selectedInspectorRecipe());
+                    return true;
+                }
+            }
+            patternDraftScroll = Math.max(0, Math.min(maxPatternDraftScroll(hoveredDraft), patternDraftScroll + direction));
+            return true;
+        }
         if (isPointInsideBatchBadge(mouseX, mouseY)) {
             int direction = (int) Math.signum(scrollY);
             if (direction != 0) {
@@ -3693,6 +3965,16 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (patternAmountEditor != null && patternAmountEditor.visible) {
+            if (keyCode == 257 || keyCode == 335) {
+                commitPatternAmountEditor();
+                return true;
+            }
+            if (keyCode == 256) {
+                closePatternAmountEditor(false);
+                return true;
+            }
+        }
         if (searchBox != null && searchBox.isFocused() && (keyCode == 257 || keyCode == 335)) {
             focusNextSearchResult();
             return true;
@@ -4966,49 +5248,88 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
 
     private void uploadPatterns() {
         CraftingTreeBackend backend = CraftingTreeBackends.get();
-        if (backend == null || !backend.supportsUpload()) {
+        if (backend == null || !backend.supportsUpload()) return;
+        if (backend.supportsEditablePatternDrafts()) {
+            List<PatternEncodingRequest> requests = collectEncodablePatternRequests(backend);
+            if (requests.isEmpty()) {
+                showNoPatternsMessage();
+                return;
+            }
+            if (!validatePatternRequests(backend, requests)) return;
+            if (backend.uploadPatternDrafts(requests)) this.onClose();
             return;
         }
         List<RecipeTreeRecipeViewModel> recipes = collectEncodableRecipes();
         if (recipes.isEmpty()) {
-            var player = Minecraft.getInstance().player;
-            if (player != null) {
-                player.displayClientMessage(Component.translatable("message.jeict.recipe_tree_no_patterns"), true);
-            }
+            showNoPatternsMessage();
             return;
         }
-        if (backend.uploadPatterns(recipes)) {
-            this.onClose();
-        }
+        if (backend.uploadPatterns(recipes)) this.onClose();
     }
 
     private void encodePatterns() {
         CraftingTreeBackend backend = CraftingTreeBackends.get();
-        if (backend == null || !backend.supportsEncode()) {
+        if (backend == null || !backend.supportsEncode()) return;
+        if (backend.supportsEditablePatternDrafts()) {
+            List<PatternEncodingRequest> requests = collectEncodablePatternRequests(backend);
+            if (requests.isEmpty()) {
+                showNoPatternsMessage();
+                return;
+            }
+            if (!validatePatternRequests(backend, requests)) return;
+            if (backend.encodePatternDrafts(requests)) this.onClose();
             return;
         }
         List<RecipeTreeRecipeViewModel> recipes = collectEncodableRecipes();
         if (recipes.isEmpty()) {
-            var player = Minecraft.getInstance().player;
-            if (player != null) {
-                player.displayClientMessage(Component.translatable("message.jeict.recipe_tree_no_patterns"), true);
-            }
+            showNoPatternsMessage();
             return;
         }
-        if (backend.encodePatterns(recipes)) {
-            this.onClose();
+        if (backend.encodePatterns(recipes)) this.onClose();
+    }
+
+    private void showNoPatternsMessage() {
+        var player = Minecraft.getInstance().player;
+        if (player != null) player.displayClientMessage(Component.translatable("message.jeict.recipe_tree_no_patterns"), true);
+    }
+
+    private List<PatternEncodingRequest> collectEncodablePatternRequests(CraftingTreeBackend backend) {
+        Map<String, PatternEncodingRequest> unique = new LinkedHashMap<>();
+        for (RecipeTreeRecipeViewModel recipe : context.collectSelectedRecipes()) {
+            if (recipe.primaryOutputIngredient() == null) continue;
+            PatternEncodingDraft draft = patternDraftFor(recipe);
+            PatternEncodingRequest request = new PatternEncodingRequest(recipe, draft);
+            if (!backend.hasExactPatternDraft(request)) unique.putIfAbsent(draft.fingerprint(), request);
         }
+        return List.copyOf(unique.values());
+    }
+
+    private boolean validatePatternRequests(CraftingTreeBackend backend, List<PatternEncodingRequest> requests) {
+        var player = Minecraft.getInstance().player;
+        for (PatternEncodingRequest request : requests) {
+            if (!isPatternDraftValid(request.draft())) {
+                if (player != null) player.displayClientMessage(
+                        Component.translatable("message.jeict.recipe_tree_pattern_invalid", request.draft().patternName())
+                                .withStyle(ChatFormatting.RED), false);
+                return false;
+            }
+            List<Component> errors = backend.validatePatternDraft(request);
+            if (!errors.isEmpty()) {
+                if (player != null) {
+                    player.displayClientMessage(Component.translatable("message.jeict.recipe_tree_pattern_invalid",
+                            request.draft().patternName()).withStyle(ChatFormatting.RED), false);
+                    for (Component error : errors) player.displayClientMessage(error.copy().withStyle(ChatFormatting.RED), false);
+                }
+                return false;
+            }
+        }
+        return true;
     }
 
     private List<RecipeTreeRecipeViewModel> collectEncodableRecipes() {
         List<RecipeTreeRecipeViewModel> recipes = new ArrayList<>();
         for (RecipeTreeRecipeViewModel recipe : context.collectSelectedRecipes()) {
-            if (hasExistingPatternForOutput(recipe)) {
-                continue;
-            }
-            if (recipe.primaryOutputIngredient() != null) {
-                recipes.add(recipe);
-            }
+            if (!hasExistingPatternForOutput(recipe) && recipe.primaryOutputIngredient() != null) recipes.add(recipe);
         }
         return recipes;
     }
@@ -5213,51 +5534,24 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private record Edge(PositionedNode parent, PositionedNode child) {
     }
 
-    private record PatternPreview(List<PatternPreviewSlot> inputs, List<PatternPreviewSlot> outputs,
-            int extraInputs, int extraOutputs) {
-        private static final PatternPreview EMPTY = new PatternPreview(List.of(), List.of(), 0, 0);
+    private enum PatternControl {
+        CLEAR,
+        CYCLE_OUTPUT,
+        ITEM_SUBSTITUTION,
+        FLUID_SUBSTITUTION,
+        RESET,
+        PRESERVE_ORDER,
+        SCROLLBAR
     }
 
-    private record PatternPreviewSlot(@Nullable RecipeTreeInputViewModel input,
-            @Nullable RecipeTreeOutputViewModel output) {
-        private static PatternPreviewSlot input(RecipeTreeInputViewModel input) {
-            return new PatternPreviewSlot(input, null);
-        }
-
-        private static PatternPreviewSlot output(RecipeTreeOutputViewModel output) {
-            return new PatternPreviewSlot(null, output);
-        }
-
-        private @Nullable ITypedIngredient<?> ingredient() {
-            return input != null ? input.displayIngredient() : output == null ? null : output.ingredient();
-        }
-
-        private long amount() {
-            return input != null ? input.longAmount() : output == null ? 1L : output.amount();
-        }
-
-        private String exactAmount() {
-            if (input != null && !input.amountText().isBlank()) {
-                return input.amountText();
-            }
-            return Long.toString(amount());
-        }
-
-        private String overlayAmount() {
-            long amount = amount();
-            return amount <= 1L ? "" : formatCompactCount(amount);
-        }
-
-        private boolean consumed() {
-            return input == null || input.consumed();
-        }
-
-        private double chance() {
-            return output == null ? 1.0D : output.chance();
+    private record PatternDraftSlotBounds(boolean input, int index, @Nullable PatternEncodingSlot slot,
+            int x, int y, int width, int height) {
+        private boolean contains(double mouseX, double mouseY) {
+            return mouseX >= x && mouseX <= x + width && mouseY >= y && mouseY <= y + height;
         }
     }
 
-    private record PatternPreviewSlotBounds(PatternPreviewSlot slot, int x, int y, int width, int height) {
+    private record PatternControlBounds(PatternControl control, int x, int y, int width, int height) {
         private boolean contains(double mouseX, double mouseY) {
             return mouseX >= x && mouseX <= x + width && mouseY >= y && mouseY <= y + height;
         }
