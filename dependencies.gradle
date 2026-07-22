@@ -73,6 +73,7 @@ dependencies {
     localRuntime "curse.maven:ae2-crystal-science-1435174:8112039"
     localRuntime "curse.maven:ae2-lightning-tech-1527395:8422767"
     localRuntime "curse.maven:data-energistics-1565514:8429524"
+    localRuntime "curse.maven:ae2-utility-1521605:8479191"
 
     // Client-only runtime mods.
     clientLocalRuntime "curse.maven:ae2-jei-integration-1074338:${ae2jei_integration_file}"

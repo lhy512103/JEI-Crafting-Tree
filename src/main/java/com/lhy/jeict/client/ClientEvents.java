@@ -17,6 +17,13 @@ public final class ClientEvents {
     }
 
     public static void onRenderGuiPost(RenderGuiEvent.Post event) {
+        if (Minecraft.getInstance().screen == null) {
+            FloatingMaterialOverlayState.updateDrag();
+            FloatingMaterialOverlayState.render(event.getGuiGraphics());
+        }
+    }
+
+    public static void onScreenRenderPost(ScreenEvent.Render.Post event) {
         FloatingMaterialOverlayState.updateDrag();
         FloatingMaterialOverlayState.render(event.getGuiGraphics());
     }

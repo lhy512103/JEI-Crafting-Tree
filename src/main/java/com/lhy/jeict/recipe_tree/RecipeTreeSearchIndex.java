@@ -2,7 +2,7 @@ package com.lhy.jeict.recipe_tree;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
+import com.lhy.jeict.compat.JustEnoughCharactersCompat;
 
 /** Search/filter projection shared by graph, merged layers, and execution checklist views. */
 public final class RecipeTreeSearchIndex {
@@ -11,10 +11,10 @@ public final class RecipeTreeSearchIndex {
 
     public static boolean matches(RecipeTreeRecipeViewModel recipe, String query) {
         if (query == null || query.isBlank()) return true;
-        String normalized = query.toLowerCase(Locale.ROOT);
-        return recipe.title().getString().toLowerCase(Locale.ROOT).contains(normalized)
-                || recipe.stableIdentity().toLowerCase(Locale.ROOT).contains(normalized)
-                || recipe.inputs().stream().anyMatch(input -> input.displayName().toLowerCase(Locale.ROOT).contains(normalized));
+        return JustEnoughCharactersCompat.contains(recipe.title().getString(), query)
+                || JustEnoughCharactersCompat.contains(recipe.stableIdentity(), query)
+                || recipe.inputs().stream()
+                        .anyMatch(input -> JustEnoughCharactersCompat.contains(input.displayName(), query));
     }
 
     public static List<RecipeTreeNodeViewModel> matchingNodes(RecipeTreeNodeViewModel root, String query) {

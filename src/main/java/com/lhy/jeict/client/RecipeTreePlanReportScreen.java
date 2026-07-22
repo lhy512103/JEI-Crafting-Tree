@@ -27,18 +27,21 @@ public final class RecipeTreePlanReportScreen extends Screen {
     private final RecipePlanResult result;
     private final List<PlanTarget> targets;
     private final InventorySnapshot inventory;
+    private final SubstitutionStrategy currentStrategy;
+    private volatile Thread routeWorker;
     private Tab tab = Tab.MATERIALS;
     private int scroll;
     private long routeGeneration;
     private volatile List<RouteLine> routes = List.of();
 
     public RecipeTreePlanReportScreen(Screen parent, RecipePlanResult result, List<PlanTarget> targets,
-            InventorySnapshot inventory) {
+            InventorySnapshot inventory, SubstitutionStrategy currentStrategy) {
         super(Component.translatable("gui.jeict.recipe_tree.plan_report"));
         this.parent = parent;
         this.result = result;
         this.targets = List.copyOf(targets);
         this.inventory = inventory;
+        this.currentStrategy = currentStrategy;
     }
 
     @Override
@@ -63,13 +66,20 @@ public final class RecipeTreePlanReportScreen extends Screen {
     private void compareRoutesAsync() {
         long generation = ++routeGeneration;
         routes = List.of(new RouteLine(Component.translatable("gui.jeict.recipe_tree.plan_calculating").getString(), null, false));
-        Thread.startVirtualThread(() -> {
+        Thread previous = routeWorker;
+        if (previous != null) previous.interrupt();
+        routeWorker = Thread.startVirtualThread(() -> {
             List<RecipePlanResult> results = new ArrayList<>();
             List<SubstitutionStrategy> strategies = List.of(SubstitutionStrategy.values());
             for (SubstitutionStrategy strategy : strategies) {
-                if (generation != routeGeneration) return;
-                results.add(new RecipePlanSolver(strategy, RecipeTreeConfig.PREFERRED_NAMESPACE.get())
-                        .solve(targets, inventory));
+                if (generation != routeGeneration || Thread.currentThread().isInterrupted()) return;
+                if (strategy == currentStrategy) {
+                    results.add(result);
+                } else {
+                    results.add(new RecipePlanSolver(strategy, RecipeTreeConfig.PREFERRED_NAMESPACE.get())
+                            .solve(targets, inventory));
+                }
+                Thread.yield();
             }
             RecipeRouteComparator.Comparison comparison = RecipeRouteComparator.compare(results);
             List<RouteLine> built = new ArrayList<>();
@@ -147,6 +157,9 @@ public final class RecipeTreePlanReportScreen extends Screen {
     @Override
     public void onClose() {
         routeGeneration++;
+        Thread worker = routeWorker;
+        if (worker != null) worker.interrupt();
+        routeWorker = null;
         minecraft.setScreen(parent);
     }
 

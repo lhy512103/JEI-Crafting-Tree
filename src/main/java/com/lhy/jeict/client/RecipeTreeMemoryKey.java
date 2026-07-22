@@ -15,7 +15,9 @@ import net.neoforged.fml.ModList;
 
 /** Builds versioned, scope-aware keys for remembered recipe choices. */
 public final class RecipeTreeMemoryKey {
+    private static final char[] HEX = "0123456789abcdef".toCharArray();
     private static volatile String modpackFingerprint;
+    private static volatile ScopeProfileCache scopeProfileCache;
 
     private RecipeTreeMemoryKey() {}
 
@@ -38,14 +40,30 @@ public final class RecipeTreeMemoryKey {
 
     private static String scopeProfile() {
         Minecraft minecraft = Minecraft.getInstance();
-        return switch (RecipeTreeConfig.MEMORY_SCOPE.get()) {
+        Scope scope = RecipeTreeConfig.MEMORY_SCOPE.get();
+        String dimension = scope == Scope.WORLD
+                ? (minecraft.level == null ? "no-world" : minecraft.level.dimension().location().toString())
+                : "";
+        String serverIdentity = serverIdentity(minecraft);
+        ScopeProfileCache cached = scopeProfileCache;
+        if (cached != null && cached.matches(scope, serverIdentity, dimension)) {
+            return cached.profile();
+        }
+        String profile = switch (scope) {
             case GLOBAL -> "global";
             case SERVER -> serverProfile(minecraft);
-            case WORLD -> {
-                String dimension = minecraft.level == null ? "no-world" : minecraft.level.dimension().location().toString();
-                yield "world:" + serverProfile(minecraft) + ":" + dimension;
-            }
+            case WORLD -> "world:" + serverProfile(minecraft) + ":" + dimension;
         };
+        scopeProfileCache = new ScopeProfileCache(scope, serverIdentity, dimension, profile);
+        return profile;
+    }
+
+    private static String serverIdentity(Minecraft minecraft) {
+        var remote = minecraft.getCurrentServer();
+        if (remote != null) return "remote:" + remote.ip;
+        var integrated = minecraft.getSingleplayerServer();
+        if (integrated != null) return "integrated:" + System.identityHashCode(integrated);
+        return "none";
     }
 
     private static String serverProfile(Minecraft minecraft) {
@@ -77,10 +95,20 @@ public final class RecipeTreeMemoryKey {
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
             StringBuilder result = new StringBuilder(16);
-            for (int i = 0; i < 8; i++) result.append(String.format("%02x", digest[i]));
+            for (int i = 0; i < 8; i++) {
+                int valueByte = digest[i] & 0xFF;
+                result.append(HEX[valueByte >>> 4]).append(HEX[valueByte & 0x0F]);
+            }
             return result.toString();
         } catch (NoSuchAlgorithmException impossible) {
             return Integer.toHexString(value.hashCode());
+        }
+    }
+
+    private record ScopeProfileCache(Scope scope, String serverIdentity, String dimension, String profile) {
+        private boolean matches(Scope requestedScope, String requestedServerIdentity, String requestedDimension) {
+            return scope == requestedScope && serverIdentity.equals(requestedServerIdentity)
+                    && dimension.equals(requestedDimension);
         }
     }
 

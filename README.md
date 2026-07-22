@@ -20,9 +20,9 @@ The planning model is independent from AE2. Optional backends such as AE2 Utilit
 
 - Expands JEI recipes into a navigable dependency tree.
 - Supports normal graph and layer-merged material views.
-- Lets the user select a child recipe or an alternative ingredient at each input.
+- Lets the user select a child recipe or an alternative ingredient at each input. Recipe choices and manual collapse state are synchronized across visible occurrences of the same material at different tree depths.
 - Can automatically expand unresolved inputs when JEI exposes exactly one usable recipe.
-- Detects recursive routes and reports cycle diagnostics instead of recursing indefinitely.
+- Detects recursive routes, stops unsafe expansion, highlights the affected incoming edge and material entry, and reports cycle diagnostics instead of recursing indefinitely.
 
 #### Global multi-project planning
 
@@ -35,7 +35,7 @@ The planning model is independent from AE2. Optional backends such as AE2 Utilit
 #### Recipe semantics
 
 - Imports all outputs exposed by a JEI recipe, with one focused primary output and optional secondary outputs.
-- Supports item, fluid, chemical, and custom JEI ingredient identities.
+- Supports item, fluid, chemical, and custom JEI ingredient identities; non-item quantities use the same bottom-right count-overlay style as item stacks.
 - Treats JEI catalyst slots and backend-declared reusable inputs as non-consumed requirements.
 - Distinguishes “this output is craftable” from “this exact selected recipe already has a matching pattern.”
 
@@ -78,6 +78,7 @@ The **Plan** screen contains four projections of the same immutable planning res
 - `@namespace` narrows searches toward a mod namespace.
 - `#machine` narrows searches toward a machine name.
 - Matching nodes use the active theme accent.
+- When Just Enough Characters is installed, names and machine labels also support its configured pinyin matching rules.
 - Enter focuses the next result; the search key can focus the field from anywhere in the overview.
 
 #### Recipe memory and edit history
@@ -92,6 +93,9 @@ The **Plan** screen contains four projections of the same immutable planning res
 #### Performance design
 
 - Runs the global solver on a dedicated background thread.
+- Normalizes custom JEI ingredient renderers into a centered 16×16 slot, renders fluid icons at a consistent full fill level, and keeps quantities outside the icon area.
+- Caches scoped recipe-memory profiles and collapsed-state lookups, avoids formatter-heavy hashing, and skips repeated traversal of shared graph nodes during unique-recipe expansion.
+- Route comparison reuses the already computed active-strategy result and cancels obsolete workers instead of solving every route from scratch.
 - Cancels superseded planning requests and prevents stale results from replacing a newer tree.
 - Checks interruption during long planning traversals.
 - Uses immutable planning snapshots before entering background work.
@@ -100,6 +104,10 @@ The **Plan** screen contains four projections of the same immutable planning res
 - Caches JEI output lookups and recipe-ID indexes per JEI runtime.
 - Limits lookup result counts and unique-recipe expansion work per tick.
 - Uses visible-region culling, row indexes, and render-data caches in the overview.
+- Propagates large quantities with saturating arithmetic and reuses the result during one layout refresh.
+- Aggregates repeated branches in merged-layer and top-material traversals instead of visiting the same node once per parent link.
+- Canonicalizes equivalent immediate branches in the merged projection while leaving the editable recipe tree unchanged.
+- Preserves shared DAG branches in undo/redo snapshots, preventing repeated 3x3 compression inputs from expanding exponentially in memory.
 - Keeps search filtering render-local instead of rebuilding the complete tree.
 - Renders the floating material panel from one GUI render event to prevent duplicate drawing.
 
@@ -161,7 +169,7 @@ Important extension points include:
 - `isReusableInput(...)` for tools, molds, containers, or catalysts;
 - `machineId(...)` for execution and machine-run reports;
 - encode/upload capability and actions;
-- optional substitution controls and rendering.
+- optional item/fluid substitution controls, rendered with JEICT-native labeled buttons beside the encoding actions.
 
 New integrations should implement exact pattern matching from a normalized recipe fingerprint rather than treating every pattern that produces the same output as equivalent.
 
@@ -200,6 +208,7 @@ CraftingTreeInventorySources.register(new InventorySource() {
 Optional:
 
 - AE2 Utility `1.6.0` or newer for an external AE2-oriented backend, when installed and compatible.
+- Just Enough Characters for optional pinyin matching in the overview search field.
 
 ### Build and test
 
@@ -233,17 +242,18 @@ JEI Crafting Tree 是面向 Minecraft 1.21.1 / NeoForge 的 JEI 配方规划扩�
 
 ### 主要功能
 
-- **递归配方树**：逐层展开原料配方，支持普通图形视图与同层材料合并视图。
+- **递归配方树**：逐层展开原料配方，支持普通图形视图与同层材料合并视图；同一材料在不同深度出现时，会同步配方选择和手动折叠状态。
 - **全局材料账本**：所有项目和分支共享库存、余料与副产物，避免按节点重复统计。
 - **多目标项目**：可以建立多个命名目标、设置 `long` 类型目标数量，并在项目之间切换编辑。
 - **多输出与副产物**：读取 JEI 暴露的全部输出，将次要输出重新计入全局供给。
 - **催化剂与可复用输入**：JEI catalyst 槽位和后端声明的模具、工具、容器等不会按合成次数重复消耗。
-- **通用材料身份**：支持物品、流体、化学品及其他 JEI 自定义 ingredient type，并保留 subtype 身份。
+- **通用材料身份**：支持物品、流体、化学品及其他 JEI 自定义 ingredient type，并保留 subtype 身份；非物品材料数量与物品一样使用右下角角标。
 - **替代材料策略**：提供锁定、混用库存、库存最多、优先模组命名空间和严格组件五种策略。
 - **库存聚合**：内置玩家背包、护甲、副手和当前容器；外部模组可以注册网络库存来源。
 - **计划报告**：集中展示基础原料、库存分配、余料/副产物、循环依赖、执行清单、机器运行次数和路线比较。
-- **精确已有样板判断**：区分“该输出可合成”和“当前选中的精确配方已有样板”。
-- **搜索与定位**：支持材料、配方、`@模组`、`#机器` 搜索，Enter 定位下一个结果。
+- **精确已有样板判断**：区分“该输出可合成”和“当前选中的精确配方已有样板”；禁用已有样板展开后，会立即折叠已展开分支，并阻止手动选择、配方记忆或唯一配方逻辑再次展开。
+- **搜索与定位**：支持材料、配方、`@模组`、`#机器` 搜索，Enter 定位下一个结果；安装 Just Enough Characters 后兼容其拼音匹配规则。
+- **节点详情与样板预览**：右键节点可查看材料、数量、机器和已有样板状态。安装 AE2 时，详情面板直接使用 AE2 原生样板终端背景与槽位，按 3×3 输入槽和输出槽预览编码内容、数量、催化剂及概率产物；未安装 AE2 时不创建也不绘制该预览区域。
 - **配方记忆**：按父配方、节点路径、输入槽、材料身份、服务器/世界和整合包指纹隔离记忆，并兼容迁移旧记录。
 - **撤销与重做**：覆盖配方选择、展开/折叠、替代材料和项目管理操作，最多保存 64 个会话内快照。
 - **悬浮材料面板**：可固定材料清单，在其他界面中继续查看并跳转 JEI 配方或用途。
@@ -290,8 +300,8 @@ JEI Crafting Tree 是面向 Minecraft 1.21.1 / NeoForge 的 JEI 配方规划扩�
 
 | 操作 | 功能 |
 | --- | --- |
-| 左键 | 选择、展开、检查节点或点击控件。 |
-| 右键 | 更换配方，或跳转 JEI 配方/用途。 |
+| 左键 | 选择下级配方或点击控件；禁用已有样板展开时，已有样板节点不会再打开配方选择。 |
+| 右键 | 打开节点详情；材料清单与悬浮面板中的右键操作可跳转 JEI 配方/用途。 |
 | 鼠标滚轮 | 缩放或滚动当前面板。 |
 | Shift + 滚轮 | 在支持的区域横向移动。 |
 | Ctrl + 滚轮 | 缩放合并视图或调整悬浮面板比例。 |
@@ -329,6 +339,11 @@ NeoForge 会将配置写入 `config/jeict-client.toml`。
 - 库存快照、JEI 输出查询和配方 ID 索引均带缓存与失效机制。
 - 自动展开和 JEI 查询都有可配置上限。
 - 总览使用可见区域裁剪、行索引和渲染数据缓存。
+- 节点详情的样板终端预览仅在 AE2 已加载时使用其原生纹理，最多缓存并绘制 9 个输入槽和 3 个输出槽；预览不查询 JEI 或存储网络，也不扫描整棵树。
+- 大数量传播使用饱和算术，并在一次布局刷新内复用相同计算结果，避免重复乘法和溢出。
+- 合并视图与顶部材料收集会聚合同一层级的重复分支，避免同一节点被多个父链接重复遍历。
+- 合并视图只对显示投影做等价即时分支归一化，不修改可编辑配方树、配方选择或记忆数据。
+- 撤销/重做快照会保留配方树中的共享 DAG 分支，避免 3×3 重复输入在九重压缩链中被指数级复制并耗尽内存。
 - 搜索仅过滤当前渲染结果，不会因为每次输入而重建整棵树。
 - 外部库存来源发生异常时会被隔离，不会中断其他来源和规划流程。
 
@@ -343,7 +358,7 @@ NeoForge 会将配置写入 `config/jeict-client.toml`。
 - `exactPatternFingerprint(...)`：提供稳定、规范化的精确样板指纹；
 - `isReusableInput(...)`：标记模具、工具、容器或催化剂；
 - `machineId(...)`：为执行清单和机器统计提供稳定机器标识；
-- 样板编码、上传及可选替换开关能力。
+- 样板编码、上传，以及位于编码操作左侧、采用 JEICT 原生样式的“物品替换”和“流体替换”开关。
 
 精确样板实现不应只比较输出物，而应把配方身份、规范化输入、输出以及后端需要的处理模式纳入指纹。
 
@@ -361,6 +376,7 @@ NeoForge 会将配置写入 `config/jeict-client.toml`。
 可选集成：
 
 - AE2 Utility `1.6.0` 或更新的兼容版本，可作为 AE2 功能后端。
+- Just Enough Characters，可为总览搜索框提供拼音匹配。
 
 ### 构建与测试
 
