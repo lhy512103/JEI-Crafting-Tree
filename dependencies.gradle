@@ -73,7 +73,14 @@ dependencies {
     localRuntime "curse.maven:ae2-crystal-science-1435174:8112039"
     localRuntime "curse.maven:ae2-lightning-tech-1527395:8422767"
     localRuntime "curse.maven:data-energistics-1565514:8429524"
-    localRuntime "curse.maven:ae2-utility-1521605:8479191"
+    // Prefer the sibling AE2 Utility development build so JEICT and its backend API stay in sync.
+    // Published/dev environments without that checkout continue to use the CurseMaven release.
+    def localAe2UtilityJar = file("../ae2utility-1.21.1-neoforge/build/libs/ae2utility-1.7.2.jar")
+    if (localAe2UtilityJar.exists()) {
+        localRuntime files(localAe2UtilityJar)
+    } else {
+        localRuntime "curse.maven:ae2-utility-1521605:8479191"
+    }
 
     // Client-only runtime mods.
     clientLocalRuntime "curse.maven:ae2-jei-integration-1074338:${ae2jei_integration_file}"
