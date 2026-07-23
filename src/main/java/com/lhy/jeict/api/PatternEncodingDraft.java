@@ -60,20 +60,29 @@ public final class PatternEncodingDraft {
     public static PatternEncodingDraft fromRecipe(RecipeTreeRecipeViewModel recipe, PatternEncodingMode mode,
             boolean substituteItems, boolean substituteFluids) {
         List<@Nullable PatternEncodingSlot> inputs = new ArrayList<>();
-        int inputLimit = mode == PatternEncodingMode.CRAFTING ? 9 : MAX_PROCESSING_INPUTS;
+        int inputLimit = mode.inputLimit();
         for (RecipeTreeInputViewModel input : recipe.inputs()) {
-            if (inputs.size() >= inputLimit) break;
+            if (!input.consumed()) continue;
             List<ITypedIngredient<?>> alternatives = new ArrayList<>();
             for (RecipeTreeInputViewModel.DisplayOption option : input.orderedDisplayOptions()) {
                 if (option.typedIngredient() != null) alternatives.add(option.typedIngredient());
             }
-            inputs.add(alternatives.isEmpty() ? null : new PatternEncodingSlot(alternatives, input.longAmount()));
+            PatternEncodingSlot slot = alternatives.isEmpty() ? null
+                    : new PatternEncodingSlot(alternatives, input.longAmount());
+            int gridSlot = mode == PatternEncodingMode.CRAFTING ? input.patternSlotIndex() : -1;
+            if (gridSlot >= 0) {
+                while (inputs.size() <= gridSlot) inputs.add(null);
+                inputs.set(gridSlot, slot);
+            } else {
+                if (inputs.size() >= inputLimit) break;
+                inputs.add(slot);
+            }
         }
 
         List<RecipeTreeOutputViewModel> orderedOutputs = new ArrayList<>(recipe.outputs());
         orderedOutputs.sort((left, right) -> Boolean.compare(right.primary(), left.primary()));
         List<@Nullable PatternEncodingSlot> outputs = new ArrayList<>();
-        int outputLimit = mode == PatternEncodingMode.CRAFTING ? 1 : MAX_PROCESSING_OUTPUTS;
+        int outputLimit = mode.outputLimit();
         for (RecipeTreeOutputViewModel output : orderedOutputs) {
             if (outputs.size() >= outputLimit) break;
             outputs.add(output.ingredient() == null ? null
@@ -109,11 +118,11 @@ public final class PatternEncodingDraft {
     }
 
     public void setInput(int index, @Nullable PatternEncodingSlot slot) {
-        setSlot(inputs, index, slot, mode == PatternEncodingMode.CRAFTING ? 9 : MAX_PROCESSING_INPUTS);
+        setSlot(inputs, index, slot, mode.inputLimit());
     }
 
     public void setOutput(int index, @Nullable PatternEncodingSlot slot) {
-        setSlot(outputs, index, slot, mode == PatternEncodingMode.CRAFTING ? 1 : MAX_PROCESSING_OUTPUTS);
+        setSlot(outputs, index, slot, mode.outputLimit());
     }
 
     private static void setSlot(List<@Nullable PatternEncodingSlot> slots, int index,

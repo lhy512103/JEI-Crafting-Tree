@@ -15,22 +15,29 @@ public final class RecipeTreeInputViewModel {
     private final long amount;
     private final String amountText;
     private final boolean consumed;
+    private final int patternSlotIndex;
     private RecipeTreeNodeViewModel child;
     private int selectedAlternativeIndex;
 
     public RecipeTreeInputViewModel(@Nullable RequestedIngredient requestedIngredient, List<DisplayOption> displayOptions, int amount,
             String amountText) {
-        this(requestedIngredient, displayOptions, (long) amount, stringOrEmpty(amountText), true);
+        this(requestedIngredient, displayOptions, (long) amount, stringOrEmpty(amountText), true, -1);
     }
 
     public RecipeTreeInputViewModel(@Nullable RequestedIngredient requestedIngredient, List<DisplayOption> displayOptions,
             long amount, String amountText, boolean consumed) {
+        this(requestedIngredient, displayOptions, amount, amountText, consumed, -1);
+    }
+
+    public RecipeTreeInputViewModel(@Nullable RequestedIngredient requestedIngredient, List<DisplayOption> displayOptions,
+            long amount, String amountText, boolean consumed, int patternSlotIndex) {
         this.requestedIngredient = requestedIngredient == null ? null : requestedIngredient.copy();
         this.requestedIngredientSignature = signatureOf(this.requestedIngredient, displayOptions);
         this.displayOptions = List.copyOf(new ArrayList<>(displayOptions));
         this.amount = Math.max(1L, amount);
         this.amountText = stringOrEmpty(amountText);
         this.consumed = consumed;
+        this.patternSlotIndex = patternSlotIndex >= 0 && patternSlotIndex < 9 ? patternSlotIndex : -1;
     }
 
     public @Nullable RequestedIngredient requestedIngredient() {
@@ -84,6 +91,11 @@ public final class RecipeTreeInputViewModel {
 
     public boolean consumed() {
         return consumed;
+    }
+
+    /** Original AE2 crafting-grid slot (0-8), or -1 for compact/processing inputs. */
+    public int patternSlotIndex() {
+        return patternSlotIndex;
     }
 
     public String amountText() {

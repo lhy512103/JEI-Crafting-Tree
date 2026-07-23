@@ -1,8 +1,11 @@
 package com.lhy.jeict.recipe_tree;
 
 import com.lhy.jeict.config.RecipeTreeConfig;
+import com.lhy.jeict.api.PatternEncodingDraft;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -23,6 +26,12 @@ public final class RecipeTreeRootContext {
     private final RecipeTreeNodeViewModel initialRoot;
     private final @Nullable Screen returnScreen;
     private final RecipeTreeProjectManager projects;
+    /** Pattern edits belong to this tree context, not to one temporary screen instance. */
+    private final Map<String, PatternEncodingDraft> patternDrafts = new HashMap<>();
+    private final Map<String, RecipeTreeRecipeViewModel> patternDraftSourceRecipes = new HashMap<>();
+    private final Set<String> modifiedPatternRecipeKeys = new HashSet<>();
+    private final Set<RecipeTreeNodeViewModel> modifiedPatternNodes =
+            java.util.Collections.newSetFromMap(new IdentityHashMap<>());
     private boolean disableExistingPatternExpansion = true;
 
     public RecipeTreeRootContext(RecipeTreeNodeViewModel root, @Nullable Screen returnScreen) {
@@ -42,6 +51,22 @@ public final class RecipeTreeRootContext {
 
     public RecipeTreeProjectManager projects() {
         return projects;
+    }
+
+    public Map<String, PatternEncodingDraft> patternDrafts() {
+        return patternDrafts;
+    }
+
+    public Map<String, RecipeTreeRecipeViewModel> patternDraftSourceRecipes() {
+        return patternDraftSourceRecipes;
+    }
+
+    public Set<String> modifiedPatternRecipeKeys() {
+        return modifiedPatternRecipeKeys;
+    }
+
+    public Set<RecipeTreeNodeViewModel> modifiedPatternNodes() {
+        return modifiedPatternNodes;
     }
 
     public Component title() {

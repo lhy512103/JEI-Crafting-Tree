@@ -1,5 +1,7 @@
 package com.lhy.jeict.client;
 
+import com.lhy.jeict.jei.RecipeTreeOpenHelper;
+
 import net.neoforged.neoforge.client.event.InputEvent;
 import com.lhy.jeict.config.RecipeTreeKeyMappings;
 import net.neoforged.neoforge.client.event.RenderGuiEvent;
@@ -7,6 +9,18 @@ import net.neoforged.neoforge.client.event.ScreenEvent;
 import net.minecraft.client.Minecraft;
 
 public final class ClientEvents {
+    public static void onClientTickPost(net.neoforged.neoforge.client.event.ClientTickEvent.Post event) {
+        RecipeTreeOpenHelper.onClientTickPost();
+    }
+
+    public static void onScreenOpening(ScreenEvent.Opening event) {
+        RecipeTreeOpenHelper.onScreenOpening(event);
+    }
+
+    public static void onScreenClosing(ScreenEvent.Closing event) {
+        RecipeTreeOpenHelper.onScreenClosing(event);
+    }
+
     private ClientEvents() {
     }
 

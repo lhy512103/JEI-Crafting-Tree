@@ -24,7 +24,7 @@ public final class RecipeTreeCopies {
         List<RecipeTreeInputViewModel> inputs = new ArrayList<>();
         for (RecipeTreeInputViewModel input : source.recipe().inputs()) {
             RecipeTreeInputViewModel copied = new RecipeTreeInputViewModel(input.requestedIngredientView(),
-                    input.displayOptions(), input.longAmount(), input.amountText(), input.consumed());
+                    input.displayOptions(), input.longAmount(), input.amountText(), input.consumed(), input.patternSlotIndex());
             copied.selectAlternative(input.selectedAlternativeIndex());
             inputs.add(copied);
         }
@@ -33,6 +33,7 @@ public final class RecipeTreeCopies {
                 recipe.primaryOutput(), recipe.primaryOutputAmount(), recipe.outputs(), recipe.title(), recipe.subtitle(),
                 recipe.subtitleIcon(), recipe.recipeId(), inputs);
         RecipeTreeNodeViewModel result = new RecipeTreeNodeViewModel(copiedRecipe, parent);
+        result.setPatternModified(source.isPatternModified());
 
         // Register before descending. A recipe tree normally has no cycles, but this also prevents malformed
         // data from recursing forever and, critically, keeps repeated 3x3 inputs pointing at one copied child.

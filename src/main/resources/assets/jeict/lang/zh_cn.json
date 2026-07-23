@@ -144,5 +144,7 @@
   "message.jeict.recipe_tree_pattern_invalid": "样板“%s”无效，已取消批量编码/上传。",
   "gui.jeict.recipe_tree.pattern_input_removed": "警告：已删除原配方输入，机器可能缺少材料",
   "gui.jeict.recipe_tree.pattern_output_removed": "已从 AE2 样板声明排除副产物；机器仍可能产出它",
-  "gui.jeict.recipe_tree.pattern_primary_changed": "警告：主要输出已改变，与配方树目标可能不一致"
+  "gui.jeict.recipe_tree.pattern_primary_changed": "警告：主要输出已改变，与配方树目标可能不一致",
+  "gui.jeict.recipe_tree.jei_preview": "JEI 配方预览",
+  "gui.jeict.recipe_tree.jei_preview_unavailable": "无法加载对应的 JEI 配方预览"
 }

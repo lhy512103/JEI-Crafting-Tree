@@ -2,6 +2,8 @@
 
 [English](#english) | [中文](#中文)
 
+**Current release:** `v0.0.1` · [Download from GitHub Releases](https://github.com/lhy512103/JEI-Crafting-Tree/releases/tag/v0.0.1) · [Changelog](CHANGELOG.md)
+
 JEI Crafting Tree is a NeoForge extension for JEI that turns a selected recipe into an interactive, recursive production plan. It works as a standalone client-side planning tool and exposes integration APIs for storage networks, exact pattern detection, pattern encoding, and machine-aware inventory sources.
 
 ---
@@ -214,10 +216,15 @@ CraftingTreeInventorySources.register(new InventorySource() {
 
 ### Requirements
 
+JEI Crafting Tree is a client-side mod. Install it on the client together with JEI; dedicated servers do not
+need it. Installing the jar on a dedicated server is harmless because its mod entry point is client-only.
+The mod does not register a mandatory client/server network channel, so clients can join servers without JEI
+Crafting Tree installed. Optional encoding or upload integrations may still have their own server-side requirements.
+
 - Minecraft `1.21.1`
 - NeoForge `21.1.233` or newer in the compatible `21.1.x` line
 - Java `21`
-- JEI `19.21.0` or newer; development uses `19.27.0.340`
+- JEI `19.21.0` or newer; release `v0.0.1` is tested with JEI `19.27.0.340`
 
 Optional:
 
@@ -399,10 +406,15 @@ NeoForge 会将配置写入 `config/jeict-client.toml`。
 
 ### 运行要求
 
+JEI Crafting Tree 是客户端模组，只需要与 JEI 一起安装在客户端；专用服务端无需安装。即使把 jar
+放入专用服务端，客户端限定的模组入口也不会在服务端加载。本模组没有注册强制双端存在的网络通道，
+因此客户端可以正常进入未安装 JEI Crafting Tree 的服务器。样板编码、上传等可选兼容后端可能仍有其
+自身的服务端安装要求。
+
 - Minecraft `1.21.1`
 - NeoForge `21.1.233` 或兼容的更新版本
 - Java `21`
-- JEI `19.21.0` 或更新版本；当前开发版本为 `19.27.0.340`
+- JEI `19.21.0` 或更新版本；正式版 `v0.0.1` 已使用 JEI `19.27.0.340` 测试
 
 可选集成：
 

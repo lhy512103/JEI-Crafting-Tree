@@ -10,6 +10,7 @@ import net.minecraft.world.item.ItemStack;
 public final class RecipeTreeNodeViewModel {
     private RecipeTreeRecipeViewModel recipe;
     private final RecipeTreeNodeViewModel parent;
+    private boolean patternModified;
 
     public RecipeTreeNodeViewModel(RecipeTreeRecipeViewModel recipe, RecipeTreeNodeViewModel parent) {
         this.recipe = recipe;
@@ -28,6 +29,14 @@ public final class RecipeTreeNodeViewModel {
 
     public RecipeTreeNodeViewModel parent() {
         return parent;
+    }
+
+    public boolean isPatternModified() {
+        return patternModified;
+    }
+
+    public void setPatternModified(boolean patternModified) {
+        this.patternModified = patternModified;
     }
 
     public boolean containsRecipe(RecipeTreeRecipeViewModel candidate) {

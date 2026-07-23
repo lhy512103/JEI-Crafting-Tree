@@ -144,5 +144,7 @@
   "message.jeict.recipe_tree_pattern_invalid": "Pattern “%s” is invalid; batch encode/upload was cancelled.",
   "gui.jeict.recipe_tree.pattern_input_removed": "Warning: a source input was removed; the machine may lack materials",
   "gui.jeict.recipe_tree.pattern_output_removed": "A byproduct was excluded from AE2; the machine may still produce it",
-  "gui.jeict.recipe_tree.pattern_primary_changed": "Warning: the primary output changed and may not match the tree target"
+  "gui.jeict.recipe_tree.pattern_primary_changed": "Warning: the primary output changed and may not match the tree target",
+  "gui.jeict.recipe_tree.jei_preview": "JEI Recipe Preview",
+  "gui.jeict.recipe_tree.jei_preview_unavailable": "The matching JEI recipe preview is unavailable"
 }

@@ -159,8 +159,8 @@ public final class RecipeTreeTheme {
             return;
         }
         Palette theme = current();
-        int fill = isNexStyle() ? 0xFFF7F7F5 : 0xFFFFFFFF;
-        graphics.fill(left, top, right, bottom, theme.nodeBorder());
+        int fill = isNexStyle() ? 0xFFF7F7F5 : theme.nodeFill();
+        graphics.fill(left, top, right, bottom, accent);
         graphics.fill(left + 1, top + 1, right - 1, bottom - 1, fill);
     }
 

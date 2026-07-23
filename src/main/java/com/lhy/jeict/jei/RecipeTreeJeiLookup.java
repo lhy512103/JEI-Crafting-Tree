@@ -25,6 +25,7 @@ import net.neoforged.neoforge.fluids.FluidStack;
 
 import mezz.jei.api.constants.RecipeTypes;
 import mezz.jei.api.constants.VanillaTypes;
+import mezz.jei.api.gui.IRecipeLayoutDrawable;
 import mezz.jei.api.gui.drawable.IDrawable;
 import mezz.jei.api.gui.ingredient.IRecipeSlotView;
 import mezz.jei.api.gui.ingredient.IRecipeSlotsView;
@@ -57,7 +58,8 @@ public final class RecipeTreeJeiLookup {
                 Component.translatable("gui.jeict.recipe_tree.root_title"),
                 null,
                 null,
-                null));
+                null,
+                false));
     }
 
     public static List<RecipeTreeRecipeViewModel> findRecipesByOutput(@Nullable ITypedIngredient<?> output) {
@@ -119,6 +121,28 @@ public final class RecipeTreeJeiLookup {
         ensureRecipeIdIndex(runtime);
         RecipeHandle handle = RECIPE_ID_INDEX.get(recipeId);
         return handle == null ? Optional.empty() : createSnapshotForRecipe(runtime, handle.category(), handle.recipe());
+    }
+
+    /**
+     * Creates a renderable JEI layout for the immutable source recipe represented by a tree node.
+     * Callers should cache the result for the lifetime of their screen; constructing a layout performs
+     * JEI recipe/category work and is intentionally not suitable for the frame loop.
+     */
+    public static Optional<IRecipeLayoutDrawable<?>> createRecipePreview(@Nullable RecipeTreeRecipeViewModel recipe) {
+        if (recipe == null || recipe.recipeId() == null) return Optional.empty();
+        IJeiRuntime runtime = JeiCraftingTreePlugin.getJeiRuntime();
+        if (runtime == null) return Optional.empty();
+        ensureRecipeIdIndex(runtime);
+        RecipeHandle handle = RECIPE_ID_INDEX.get(recipe.recipeId());
+        return handle == null ? Optional.empty() : createLayout(runtime, handle);
+    }
+
+    @SuppressWarnings({ "rawtypes", "unchecked" })
+    private static Optional<IRecipeLayoutDrawable<?>> createLayout(IJeiRuntime runtime, RecipeHandle handle) {
+        IFocusFactory focusFactory = runtime.getJeiHelpers().getFocusFactory();
+        var focusGroup = focusFactory.createFocusGroup(List.of());
+        return (Optional) runtime.getRecipeManager().createRecipeLayoutDrawable(
+                (IRecipeCategory) handle.category(), handle.recipe(), focusGroup);
     }
 
     @SuppressWarnings({ "rawtypes", "unchecked" })
@@ -250,12 +274,13 @@ public final class RecipeTreeJeiLookup {
         Component subtitle = category.getTitle();
         IDrawable subtitleIcon = category.getIcon();
         ResourceLocation recipeId = category.getRegistryName(typedRecipe);
-        return Optional.of(createSnapshot(layout.getRecipeSlotsView(), recipeId, title, subtitle, subtitleIcon, preferredOutput));
+        return Optional.of(createSnapshot(layout.getRecipeSlotsView(), recipeId, title, subtitle, subtitleIcon, preferredOutput,
+                RecipeTypes.CRAFTING.equals(category.getRecipeType())));
     }
 
     private static RecipeTreeRecipeViewModel createSnapshot(IRecipeSlotsView recipeSlots, @Nullable ResourceLocation recipeId,
             Component title, @Nullable Component subtitle, @Nullable IDrawable subtitleIcon,
-            @Nullable ITypedIngredient<?> preferredOutput) {
+            @Nullable ITypedIngredient<?> preferredOutput, boolean preserveCraftingGrid) {
         IJeiRuntime runtime = JeiCraftingTreePlugin.getJeiRuntime();
         IIngredientManager ingredientManager = runtime == null ? null : runtime.getIngredientManager();
         List<RecipeTreeOutputViewModel> collectedOutputs = new ArrayList<>();
@@ -290,8 +315,7 @@ public final class RecipeTreeJeiLookup {
         long primaryOutputAmount = primaryOutputView.amount();
 
         List<RecipeTreeInputViewModel> inputs = new ArrayList<>();
-        appendInputs(inputs, recipeSlots.getSlotViews(RecipeIngredientRole.INPUT), ingredientManager, true);
-        appendInputs(inputs, recipeSlots.getSlotViews(RecipeIngredientRole.CATALYST), ingredientManager, false);
+        appendInputs(inputs, recipeSlots.getSlotViews(RecipeIngredientRole.INPUT), ingredientManager, true, preserveCraftingGrid);
 
         Component resolvedTitle = title;
         if ((resolvedTitle == null || resolvedTitle.getString().isBlank()) && ingredientManager != null && primaryOutputIngredient != null) {
@@ -305,8 +329,9 @@ public final class RecipeTreeJeiLookup {
     }
 
     private static void appendInputs(List<RecipeTreeInputViewModel> inputs, List<IRecipeSlotView> slots,
-            @Nullable IIngredientManager ingredientManager, boolean consumed) {
-        for (IRecipeSlotView slotView : slots) {
+            @Nullable IIngredientManager ingredientManager, boolean consumed, boolean preserveSlotIndex) {
+        for (int slotIndex = 0; slotIndex < slots.size(); slotIndex++) {
+            IRecipeSlotView slotView = slots.get(slotIndex);
             List<DisplayOption> displayOptions = ingredientManager == null ? List.of()
                     : toDisplayOptions(ingredientManager, slotView);
             RequestedIngredient ingredient = toRequestedIngredient(slotView);
@@ -317,7 +342,8 @@ public final class RecipeTreeJeiLookup {
                 if (displayed != null) amount = resolveDisplayedIngredientAmountLong(ingredientManager, displayed, amount);
             }
             inputs.add(new RecipeTreeInputViewModel(ingredient, displayOptions, amount,
-                    formatAmountText(slotView, (int) Math.min(Integer.MAX_VALUE, amount)), consumed));
+                    formatAmountText(slotView, (int) Math.min(Integer.MAX_VALUE, amount)), consumed,
+                    preserveSlotIndex ? slotIndex : -1));
         }
     }
 
@@ -498,7 +524,7 @@ public final class RecipeTreeJeiLookup {
                 .findFirst()
                 .orElse(0);
         if (fluidAmount > 0) {
-            return fluidAmount + " mB";
+            return formatFluidBuckets(fluidAmount);
         }
 
         ITypedIngredient<?> displayed = getDisplayedIngredient(slotView);
@@ -514,7 +540,24 @@ public final class RecipeTreeJeiLookup {
 
     private static String tryFormatMekanismChemicalAmount(Object ingredient) {
         long amount = GenericIngredientUtil.tryGetMekanismChemicalAmount(ingredient);
-        return amount > 0 ? amount + " mB" : "";
+        return amount > 0 ? formatMekanismChemicalAmount(amount) : "";
+    }
+
+    private static String formatMekanismChemicalAmount(long milliBuckets) {
+        long safeAmount = Math.max(1L, milliBuckets);
+        if (safeAmount < 1_000L) {
+            return safeAmount + " mB";
+        }
+        String buckets = java.math.BigDecimal.valueOf(safeAmount, 3)
+                .stripTrailingZeros().toPlainString();
+        return buckets + " B";
+    }
+
+
+    private static String formatFluidBuckets(long milliBuckets) {
+        String buckets = java.math.BigDecimal.valueOf(Math.max(1L, milliBuckets), 3)
+                .stripTrailingZeros().toPlainString();
+        return buckets + " B";
     }
 
     private static ItemStack extractItemStack(ITypedIngredient<?> ingredient, int fallbackCount) {
