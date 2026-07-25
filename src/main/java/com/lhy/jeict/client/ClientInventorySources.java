@@ -8,18 +8,16 @@ import java.util.Map;
 import com.lhy.jeict.api.CraftingTreeInventorySources;
 import com.lhy.jeict.api.InventoryAmount;
 import com.lhy.jeict.api.InventorySource;
+import com.lhy.jeict.api.MenuInventorySource;
+import com.lhy.jeict.compat.ae2.Ae2CompatBootstrap;
 import com.lhy.jeict.jei.JeiCraftingTreePlugin;
 import com.lhy.jeict.planning.MaterialKey;
 import com.lhy.jeict.planning.RecipePlanSolver;
-import com.lhy.jeict.util.IngredientIdentityUtil;
 
-import mezz.jei.api.ingredients.ITypedIngredient;
 import mezz.jei.api.runtime.IIngredientManager;
 import net.minecraft.client.Minecraft;
-import net.minecraft.world.inventory.Slot;
-import net.minecraft.world.item.ItemStack;
 
-/** Registers the player inventory and currently open non-player menu as a live planning source. */
+/** Registers player stock and one authoritative provider for the currently open menu. */
 public final class ClientInventorySources {
     private static boolean registered;
 
@@ -29,10 +27,12 @@ public final class ClientInventorySources {
     public static void registerBuiltIns() {
         if (registered) return;
         registered = true;
-        CraftingTreeInventorySources.register(new ClientMenuInventorySource());
+        ClientMenuInventoryProviders.register(new SlotMenuInventoryProvider());
+        Ae2CompatBootstrap.registerIfLoaded();
+        CraftingTreeInventorySources.register(new ClientInventorySource());
     }
 
-    private static final class ClientMenuInventorySource implements InventorySource {
+    private static final class ClientInventorySource implements InventorySource {
         @Override
         public String id() {
             return "jeict:player_and_open_menu";
@@ -52,12 +52,15 @@ public final class ClientInventorySources {
         @Override
         public long version() {
             Minecraft minecraft = Minecraft.getInstance();
-            if (minecraft.player == null) return 0L;
-            long playerVersion = minecraft.player.getInventory().getTimesChanged();
+            var runtime = JeiCraftingTreePlugin.getJeiRuntime();
+            if (minecraft.player == null || runtime == null) return 0L;
+            long hash = minecraft.player.getInventory().getTimesChanged();
             var menu = minecraft.player.containerMenu;
-            long menuVersion = menu == null ? 0L : menu.getStateId();
-            long menuId = menu == null ? 0L : menu.containerId;
-            return (playerVersion << 32) ^ menuVersion ^ menuId;
+            MenuInventorySource provider = ClientMenuInventoryProviders.select(menu);
+            if (menu == null || provider == null) return hash;
+            hash = 31L * hash + menu.containerId;
+            hash = 31L * hash + provider.id().hashCode();
+            return 31L * hash + provider.version(menu, runtime.getIngredientManager());
         }
 
         @Override
@@ -67,30 +70,20 @@ public final class ClientInventorySources {
             if (minecraft.player == null || runtime == null) return List.of();
             IIngredientManager manager = runtime.getIngredientManager();
             Map<MaterialKey, Long> amounts = new LinkedHashMap<>();
-            for (ItemStack stack : minecraft.player.getInventory().items) {
-                add(manager, amounts, stack);
-            }
-            for (ItemStack stack : minecraft.player.getInventory().offhand) {
-                add(manager, amounts, stack);
-            }
-            for (ItemStack stack : minecraft.player.getInventory().armor) {
-                add(manager, amounts, stack);
-            }
-            if (minecraft.player.containerMenu != null) {
-                for (Slot slot : minecraft.player.containerMenu.slots) {
-                    if (slot.container != minecraft.player.getInventory()) add(manager, amounts, slot.getItem());
+            minecraft.player.getInventory().items.forEach(stack -> SlotMenuInventoryProvider.add(manager, amounts, stack));
+            minecraft.player.getInventory().offhand.forEach(stack -> SlotMenuInventoryProvider.add(manager, amounts, stack));
+            minecraft.player.getInventory().armor.forEach(stack -> SlotMenuInventoryProvider.add(manager, amounts, stack));
+
+            var menu = minecraft.player.containerMenu;
+            MenuInventorySource provider = ClientMenuInventoryProviders.select(menu);
+            if (menu != null && provider != null) {
+                for (InventoryAmount entry : provider.snapshot(menu, manager)) {
+                    amounts.merge(entry.material(), entry.amount(), RecipePlanSolver::saturatedAdd);
                 }
             }
             List<InventoryAmount> result = new ArrayList<>(amounts.size());
             amounts.forEach((key, amount) -> result.add(new InventoryAmount(key, amount)));
             return List.copyOf(result);
-        }
-
-        private static void add(IIngredientManager manager, Map<MaterialKey, Long> amounts, ItemStack stack) {
-            if (stack == null || stack.isEmpty()) return;
-            ITypedIngredient<?> typed = manager.createTypedIngredient(stack.copyWithCount(1), true).orElse(null);
-            if (typed == null) return;
-            amounts.merge(IngredientIdentityUtil.keyOf(manager, typed), (long) stack.getCount(), RecipePlanSolver::saturatedAdd);
         }
     }
 }

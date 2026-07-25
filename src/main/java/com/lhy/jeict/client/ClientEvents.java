@@ -1,5 +1,6 @@
 package com.lhy.jeict.client;
 
+import com.lhy.jeict.api.CraftingTreeApiEvents;
 import com.lhy.jeict.jei.RecipeTreeOpenHelper;
 
 import net.neoforged.neoforge.client.event.InputEvent;
@@ -11,6 +12,8 @@ import net.minecraft.client.Minecraft;
 public final class ClientEvents {
     public static void onClientTickPost(net.neoforged.neoforge.client.event.ClientTickEvent.Post event) {
         RecipeTreeOpenHelper.onClientTickPost();
+        RecipeTreeAutoCraftSession.tick();
+        CraftingTreeApiEvents.onClientTick();
     }
 
     public static void onScreenOpening(ScreenEvent.Opening event) {
@@ -44,6 +47,10 @@ public final class ClientEvents {
     }
 
     public static void onScreenMousePressed(ScreenEvent.MouseButtonPressed.Pre event) {
+        if (RecipeTreeAutoCraftSession.status().running()
+                && !FloatingMaterialOverlayState.isAutoCraftButtonAt(event.getMouseX(), event.getMouseY())) {
+            RecipeTreeAutoCraftSession.cancelForManualInput();
+        }
         if (JeiRecipeTreeShortcutOverlay.handleMousePressed(event)) return;
         FloatingMaterialOverlayState.handleScreenMouseClicked(event);
     }

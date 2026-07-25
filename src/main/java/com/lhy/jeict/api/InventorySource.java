@@ -13,6 +13,14 @@ public interface InventorySource {
         return 0;
     }
 
+    /**
+     * Logical storage identity used to prevent duplicate aggregation. Sources in the same group are mutually
+     * exclusive; the highest-priority available source is authoritative. The default keeps legacy sources separate.
+     */
+    default String authorityGroup() {
+        return id();
+    }
+
     default boolean isAvailable() {
         return true;
     }

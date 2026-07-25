@@ -91,7 +91,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private static final int SETTINGS_WIDTH = 148;
     private static final int SETTINGS_COLLAPSED_WIDTH = 34;
     private static final int BATCH_TEXT_GAP = 3;
-    private static final int MODIFIED_NODE_COLOR = 0xFFFF9800;
     private static final boolean AE2_LOADED = ModList.get().isLoaded("ae2");
     private static final ResourceLocation AE2_PATTERN_MODES_TEXTURE =
             ResourceLocation.fromNamespaceAndPath("ae2", "textures/guis/pattern_modes.png");
@@ -2039,6 +2038,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         if (clippedWorkspace) {
             graphics.enableScissor(canvasLeft() + 2, HEADER_HEIGHT + 2, canvasRight() - 2, this.height - footerHeight - 2);
         }
+        if (clippedWorkspace && RecipeTreeTheme.isClassicStyle()) {
+            graphics.drawManaged(() -> RecipeTreeTheme.drawBlueprintGrid(graphics,
+                    canvasLeft() + 2, HEADER_HEIGHT + 2, canvasRight() - 2, this.height - footerHeight - 2,
+                    panX, panY, zoom));
+        }
         graphics.pose().pushPose();
         graphics.pose().translate(panX, panY, 0.0F);
         graphics.pose().scale((float) zoom, (float) zoom, 1.0f);
@@ -2293,7 +2297,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         int titleX = root.left() - gap - titleWidth;
         int titleY = root.y() + Math.max(0, (NODE_HEIGHT - this.font.lineHeight) / 2);
         graphics.drawString(this.font, title, titleX, titleY,
-                focused ? 0xFFFFB74D : theme.titleText(), false);
+                focused ? theme.focusHighlight() : theme.titleText(), false);
     }
 
     private void renderSingleTreeCanvas(GuiGraphics graphics, RecipeTreeTheme.Palette theme) {
@@ -2335,7 +2339,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 }
                 workspaceLinkBounds.add(new WorkspaceLinkBounds(placement.position(), direction, x, y, width, height));
                 graphics.drawCenteredString(this.font, Component.literal(visibleText),
-                        (int) x + width / 2, (int) y + 4, 0xFF76B9E6);
+                        (int) x + width / 2, (int) y + 4, theme.linkText());
             }
         }
     }
@@ -2372,6 +2376,12 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     private boolean handleTreeCanvasClick(double logicalMouseX, double logicalMouseY, int button) {
+        if (button == 0 && topMaterialsPinButtonBounds != null
+                && topMaterialsPinButtonBounds.contains(logicalMouseX, logicalMouseY)) {
+            FloatingMaterialOverlayState.set(createFloatingMaterialSnapshot());
+            onClose();
+            return true;
+        }
         if (button == 0) {
             for (AlternativeButtonBounds bounds : alternativeButtonBounds) {
                 if (bounds.contains(logicalMouseX, logicalMouseY)) {
@@ -2883,10 +2893,10 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         int orderButtonY = y + 24;
         int centeredTextOffset = (16 - this.font.lineHeight) / 2;
         graphics.drawCenteredString(this.font, Component.translatable("gui.jeict.recipe_tree.pattern_reset"),
-                x + 153, resetButtonY + centeredTextOffset, 0xFFFFFFFF);
+                x + 153, resetButtonY + centeredTextOffset, theme.controlText());
         graphics.drawCenteredString(this.font, Component.translatable(draft.preserveInputOrder()
                 ? "gui.jeict.recipe_tree.pattern_order_on" : "gui.jeict.recipe_tree.pattern_order_off"),
-                x + 153, orderButtonY + centeredTextOffset, 0xFFFFFFFF);
+                x + 153, orderButtonY + centeredTextOffset, theme.controlText());
     }
 
     private void renderProcessingPatternScrollbar(GuiGraphics graphics, PatternEncodingDraft draft, int x, int y) {
@@ -2976,19 +2986,27 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             return;
         }
 
-        // MEST panels float over the world with a compact two-pixel shadow.
-        graphics.fill(7, 7, this.width - 1, this.height - 1, 0x66000000);
-        graphics.fill(this.width - 7, 7, this.width - 3, this.height - 3, 0x66000000);
+        boolean classic = RecipeTreeTheme.isClassicStyle();
+        if (!classic) {
+            // MEST panels float over the world with a compact two-pixel shadow.
+            graphics.fill(7, 7, this.width - 1, this.height - 1, 0x66000000);
+            graphics.fill(this.width - 7, 7, this.width - 3, this.height - 3, 0x66000000);
+        }
         RecipeTreeTheme.drawRaisedPanel(graphics, 3, 3, this.width - 5, this.height - 5);
 
-        // AE2 headers remain part of the light dialog surface, separated by two hairlines.
-        graphics.fill(8, HEADER_HEIGHT - 2, this.width - 10, HEADER_HEIGHT - 1, theme.raisedShadow());
-        graphics.fill(8, HEADER_HEIGHT - 1, this.width - 10, HEADER_HEIGHT, theme.raisedHighlight());
         int footerHeight = currentFooterHeight();
-        graphics.fill(8, this.height - footerHeight, this.width - 10,
-                this.height - footerHeight + 1, theme.raisedShadow());
-        graphics.fill(8, this.height - footerHeight + 1, this.width - 10,
-                this.height - footerHeight + 2, theme.raisedHighlight());
+        if (classic) {
+            RecipeTreeTheme.drawHairline(graphics, 8, this.width - 10, HEADER_HEIGHT - 1);
+            RecipeTreeTheme.drawHairline(graphics, 8, this.width - 10, this.height - footerHeight);
+        } else {
+            // AE2 headers remain part of the light dialog surface, separated by two hairlines.
+            graphics.fill(8, HEADER_HEIGHT - 2, this.width - 10, HEADER_HEIGHT - 1, theme.raisedShadow());
+            graphics.fill(8, HEADER_HEIGHT - 1, this.width - 10, HEADER_HEIGHT, theme.raisedHighlight());
+            graphics.fill(8, this.height - footerHeight, this.width - 10,
+                    this.height - footerHeight + 1, theme.raisedShadow());
+            graphics.fill(8, this.height - footerHeight + 1, this.width - 10,
+                    this.height - footerHeight + 2, theme.raisedHighlight());
+        }
 
         int wellLeft = canvasLeft();
         int wellTop = HEADER_HEIGHT;
@@ -3006,7 +3024,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         int right = canvasRight();
         int bottom = this.height - currentFooterHeight();
         RecipeTreeTheme.drawBorder(graphics, left, top, right, bottom, theme.chromeBorder());
-        if (right - left > 2 && bottom - top > 2) {
+        if (!RecipeTreeTheme.isClassicStyle() && right - left > 2 && bottom - top > 2) {
             graphics.fill(left + 1, top + 1, right - 1, top + 2, theme.raisedShadow());
             graphics.fill(left + 1, top + 1, left + 2, bottom - 1, theme.raisedShadow());
             graphics.fill(left + 1, bottom - 2, right - 1, bottom - 1, theme.raisedHighlight());
@@ -3203,15 +3221,25 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 boolean cycleWarning = edge.child().graph().cycleWarning();
                 boolean modifiedRecipe = isModifiedPatternRecipe(edge.child().graph().recipeNode());
                 int edgeColor = cycleWarning ? theme.danger()
-                        : (modifiedRecipe ? MODIFIED_NODE_COLOR : (focusedPathEdge ? theme.accent() : theme.edge()));
+                        : (modifiedRecipe ? theme.modifiedAccent() : (focusedPathEdge ? theme.accent() : theme.edge()));
                 graphics.fill(startX, startY, startX + 1, midY, edgeColor);
                 graphics.fill(Math.min(startX, endX), midY, Math.max(startX, endX) + 1, midY + 1, edgeColor);
                 graphics.fill(endX, midY, endX + 1, endY, edgeColor);
+                if (RecipeTreeTheme.isClassicStyle()) {
+                    drawEdgeJoint(graphics, startX, midY, edgeColor);
+                    drawEdgeJoint(graphics, endX, midY, edgeColor);
+                    drawEdgeJoint(graphics, endX, endY - 1, edgeColor);
+                }
                 if (cycleWarning) {
                     graphics.drawCenteredString(this.font, "↻", endX, Math.max(midY, endY - 11), theme.danger());
                 }
             }
         }
+    }
+
+    /** Square joint marker that gives classic edges a drafted, plotted-node look. */
+    private static void drawEdgeJoint(GuiGraphics graphics, int x, int y, int color) {
+        graphics.fill(x - 1, y - 1, x + 2, y + 2, color);
     }
 
     private void renderNodes(GuiGraphics graphics) {
@@ -3243,7 +3271,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 lastRenderedNodeCount++;
                 boolean modifiedRecipe = isModifiedPatternRecipe(node.graph().recipeNode());
                 int accent = node.graph().cycleWarning() ? theme.danger()
-                        : (modifiedRecipe ? MODIFIED_NODE_COLOR
+                        : (modifiedRecipe ? theme.modifiedAccent()
                         : (searchMatch && hasSearchQuery() ? theme.accent() : (node.graph().showsPatternHint()
                         ? theme.patternHintBorder()
                         : (node.graph().recipeNode() != null ? theme.controlHoverText() : theme.mutedText()))));
@@ -3364,13 +3392,22 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             if (!isLogicalRectVisible(minX - 1, startY, maxX + 1, endY)) {
                 continue;
             }
-            int edgeColor = isModifiedLayerRow(rowB) ? MODIFIED_NODE_COLOR : theme.edge();
+            int edgeColor = isModifiedLayerRow(rowB) ? theme.modifiedAccent() : theme.edge();
             for (int center : parentCenters) {
                 graphics.fill(center, startY, center + 1, midY + 1, edgeColor);
             }
             graphics.fill(minX, midY, maxX + 1, midY + 1, edgeColor);
             for (int center : childCenters) {
                 graphics.fill(center, midY, center + 1, endY, edgeColor);
+            }
+            if (RecipeTreeTheme.isClassicStyle()) {
+                for (int center : parentCenters) {
+                    drawEdgeJoint(graphics, center, midY, edgeColor);
+                }
+                for (int center : childCenters) {
+                    drawEdgeJoint(graphics, center, midY, edgeColor);
+                    drawEdgeJoint(graphics, center, endY - 1, edgeColor);
+                }
             }
             lastRenderedEdgeCount += parentCenters.size() + childCenters.size();
         }
@@ -3424,7 +3461,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 lastRenderedLayerMaterialCount++;
                 boolean modifiedRecipe = isModifiedLayerMaterial(material);
                 int accent = material.cycleWarning() ? theme.danger()
-                        : (modifiedRecipe ? MODIFIED_NODE_COLOR
+                        : (modifiedRecipe ? theme.modifiedAccent()
                         : (searchMatch && hasSearchQuery() ? theme.accent() : (material.showsPatternHint()
                         ? theme.patternHintBorder()
                         : (!material.recipeTargets().isEmpty() ? theme.controlHoverText() : theme.mutedText()))));
@@ -4641,12 +4678,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         }
         if (insideWorkspace && button == 0
                 && handleWorkspaceLinkClick(logicalMouseXForPin, logicalMouseYForPin)) {
-            return true;
-        }
-        if (insideWorkspace && button == 0 && topMaterialsPinButtonBounds != null
-                && topMaterialsPinButtonBounds.contains(logicalMouseXForPin, logicalMouseYForPin)) {
-            FloatingMaterialOverlayState.set(createFloatingMaterialSnapshot());
-            this.onClose();
             return true;
         }
         if (insideWorkspace && button == 0) {
@@ -6222,7 +6253,8 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             }
             renderTypedSlot(graphics, panelX + 4, optionY, option.typedIngredient());
             graphics.drawString(this.font, trimToWidth(Component.literal(option.label()), panelWidth - 28),
-                    panelX + 24, optionY + 5, theme.alternativeText(), false);
+                    panelX + 24, optionY + 5,
+                    selected ? theme.onControlText() : theme.alternativeText(), false);
             alternativeOptionBounds.add(new AlternativeOptionBounds(i, option.typedIngredient(), panelX + 3, optionY, panelWidth - 6, 17));
         }
     }
@@ -6633,7 +6665,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         int x = canvasLeft() + Math.max(8, (canvasRight() - canvasLeft() - boxWidth) / 2);
         int y = this.height - currentFooterHeight() - boxHeight - 8;
         int border = notice.error() ? theme.danger() : theme.partial();
-        graphics.fill(x, y, x + boxWidth, y + boxHeight, 0xE010141A);
+        graphics.fill(x, y, x + boxWidth, y + boxHeight, theme.noticeBackground());
         RecipeTreeTheme.drawBorder(graphics, x, y, x + boxWidth, y + boxHeight, border);
         int textY = y + 5;
         for (Component line : lines) {

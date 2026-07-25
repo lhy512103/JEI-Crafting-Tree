@@ -13,6 +13,25 @@ public final class JeiCraftingTreeApi {
     private JeiCraftingTreeApi() {
     }
 
+    public static String apiVersion() {
+        return JeiCraftingTreeApiVersion.VERSION;
+    }
+
+    /** True only when this jar exposes the requested stable API major version. */
+    public static boolean supportsApiMajor(int requiredMajor) {
+        return JeiCraftingTreeApiVersion.isCompatibleWith(requiredMajor);
+    }
+
+    /** Client-only status of the built-in JEI transfer based auto-crafting session. */
+    public static CraftingTreeAutoCrafting.Status autoCraftStatus() {
+        return CraftingTreeAutoCrafting.status();
+    }
+
+    /** Client-only cancellation of the currently running auto-crafting session. */
+    public static void cancelAutoCraft() {
+        CraftingTreeAutoCrafting.cancel();
+    }
+
     public static void openFromLayout(IRecipeLayoutDrawable<?> recipeLayout, Screen returnScreen) {
         RecipeTreeOpenHelper.openFromLayout(recipeLayout, returnScreen);
     }

@@ -6,24 +6,33 @@ import net.minecraft.network.chat.Component;
 /**
  * Visual styles for the recipe-tree UI. {@link Style#NEX} mirrors the AE2
  * terminal chrome used by MEST: cool grey panels, restrained one-pixel bevels,
- * dark controls and a pale cyan selection accent.
+ * dark controls and a pale cyan selection accent. {@link Style#CLASSIC} is a
+ * blueprint-paper look: cool white grid canvas with navy ink. {@link Style#DARK}
+ * is the original high-contrast dark terminal.
  */
 public final class RecipeTreeTheme {
     public enum Style {
         NEX,
-        CLASSIC
+        CLASSIC,
+        DARK
     }
+
+    private static final int GRID_LOGICAL_STEP = 8;
+    private static final int GRID_MAJOR_EVERY = 5;
 
     private static Style style = Style.NEX;
 
-    private static final int[] CLASSIC_GROUP_COLORS = {
+    private static final int[] DARK_GROUP_COLORS = {
             0xFF7CC7FF, 0xFFFFC857, 0xFF7CFF9B, 0xFFFF7CA8, 0xFFB47CFF, 0xFFFF9B5F
     };
     private static final int[] NEX_GROUP_COLORS = {
             0xFF5E7190, 0xFF8A6F52, 0xFF4C8874, 0xFF9A5D70, 0xFF766AA2, 0xFF7F7A52
     };
+    private static final int[] CLASSIC_GROUP_COLORS = {
+            0xFF4A86C0, 0xFF2E7A50, 0xFF9A5040, 0xFF7A6AAA, 0xFF3A8A9A, 0xFF8A7A30
+    };
 
-    private static final Palette CLASSIC = new Palette(
+    private static final Palette DARK = new Palette(
             0xFF10161C, 0x16000000,
             0xFFFFFFFF, 0xFFDDE6EE, 0xFFEAF4FF, 0xFFD4DEE7,
             0xCC11161B, 0xFF273038, 0xFFFFFFFF, 0xFFC3CBD3, 0xFFE07A7A,
@@ -37,7 +46,9 @@ public final class RecipeTreeTheme {
             0xFF00FF00, 0xFFFFFF00, 0xFFFF0000,
             0x241E2A31, 0x38384650, 0xD010161C, 0xFF4D5962, 0xFF66737B, 0xCC05080A, 0xFF303E47,
             0xFFFFFFFF, 0xFF1A2228, 0xFF3A454D,
-            CLASSIC_GROUP_COLORS);
+            // modified / focus / link / on-control / notice backdrop
+            0xFFFF9800, 0xFFFFB74D, 0xFF76B9E6, 0xFFFFFFFF, 0xFFFFFFFF, 0xE010141A,
+            DARK_GROUP_COLORS);
 
     /**
      * MEST uses AE2's generated terminal background. These values match the
@@ -70,27 +81,99 @@ public final class RecipeTreeTheme {
             0x18777B8C, 0x30777B8C, 0xFFCBCCD4, 0xFF413F54, 0xFFF2F2F2, 0xFF878FA5, 0xFF9CD3FF,
             // bevel helpers
             0xFF517497, 0xFF696D7E, 0xFFE5E7ED,
+            // modified / focus / link / on-control / notice backdrop
+            0xFFC07A18, 0xFFB4700F, 0xFF3B6FA8, 0xFFF2F2F2, 0xFFFFFFFF, 0xF0413F54,
             NEX_GROUP_COLORS);
+
+    /**
+     * Drafting-paper look: warm paper canvas ruled with a blue grid, deep navy
+     * ink for every border, and no bevels anywhere. Selection is a solid ink
+     * fill with paper-coloured text rather than a translucent tint.
+     */
+    private static final Palette CLASSIC = new Palette(
+            // paper canvas / faint overlay
+            0xFFF7F4EC, 0x30000000,
+            // title / hint / metric / muted text
+            0xFF16346B, 0xFF5C6E8C, 0xFF1E4A7A, 0xFF93A2B8,
+            // node / material fill + borders
+            0xFFFCFAF4, 0xFFF0EDE3, 0xFF16346B, 0xFF8FA6C4, 0xFFCE3A2E,
+            // edges
+            0x5516346B, 0xFF16346B,
+            // nested panels
+            0xFF16346B, 0xFF8FA6C4, 0xFFFCFAF4,
+            // controls
+            0xFF16346B, 0xFFFCFAF4, 0xFF16346B, 0xFF1E6CB5, 0xFFCE3A2E, 0xFF1E6CB5, 0xFF1F7A4C,
+            // selection + alternative text
+            0xFF16346B, 0xFF16346B,
+            // item slots
+            0xFF16346B, 0xFF8FA6C4, 0xFFF2EFE6,
+            // machine slots
+            0xFF16346B, 0xFF8FA6C4, 0xFFFCFAF4,
+            // overlay
+            0xF7F7F4EC, 0xFFF0EDE3, 0xFFDCE7F5, 0xFF16346B, 0xFFD8D3C6,
+            // stock colors
+            0xFF1F7A4C, 0xFF9A6A10, 0xFFCE3A2E,
+            // grid + chrome
+            0x1C2F5C96, 0x382F5C96, 0xFFFCFAF4, 0xFF16346B, 0xFFDCE7F5, 0xFF8FA6C4, 0xFFDCE7F5,
+            // bevel helpers
+            0xFF16346B, 0xFF8FA6C4, 0xFFDCE7F5,
+            // modified / focus / link / on-control / notice backdrop
+            0xFFC2620C, 0xFFC2620C, 0xFF1E6CB5, 0xFFFCFAF4, 0xFFFFFFFF, 0xF2FCFAF4,
+            CLASSIC_GROUP_COLORS);
 
     private RecipeTreeTheme() {
     }
 
     public static Palette current() {
-        return style == Style.NEX ? NEX : CLASSIC;
+        return switch (style) {
+            case NEX -> NEX;
+            case CLASSIC -> CLASSIC;
+            case DARK -> DARK;
+        };
     }
 
     public static boolean isNexStyle() {
         return style == Style.NEX;
     }
 
+    public static boolean isClassicStyle() {
+        return style == Style.CLASSIC;
+    }
+
+    /** Cycles AE2 -> classic blueprint -> dark terminal. */
     public static void toggle() {
-        style = style == Style.NEX ? Style.CLASSIC : Style.NEX;
+        style = switch (style) {
+            case NEX -> Style.CLASSIC;
+            case CLASSIC -> Style.DARK;
+            case DARK -> Style.NEX;
+        };
     }
 
     public static Component styleButtonMessage() {
-        return Component.translatable(style == Style.NEX
-                ? "gui.jeict.recipe_tree.overview_style_nex"
-                : "gui.jeict.recipe_tree.overview_style_classic");
+        return Component.translatable(switch (style) {
+            case NEX -> "gui.jeict.recipe_tree.overview_style_nex";
+            case CLASSIC -> "gui.jeict.recipe_tree.overview_style_classic";
+            case DARK -> "gui.jeict.recipe_tree.overview_style_dark";
+        });
+    }
+
+    /** Single-pixel ink outline around a solid fill; the classic style's only frame. */
+    public static void drawFlatPanel(GuiGraphics graphics, int left, int top, int right, int bottom,
+            int fill, int border) {
+        int width = right - left;
+        int height = bottom - top;
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+        graphics.fill(left, top, right, bottom, border);
+        if (width > 2 && height > 2) {
+            graphics.fill(left + 1, top + 1, right - 1, bottom - 1, fill);
+        }
+    }
+
+    /** Thin ink rule used to divide sections inside a classic panel. */
+    public static void drawHairline(GuiGraphics graphics, int left, int right, int y) {
+        graphics.fill(left, y, right, y + 1, current().bevelLight());
     }
 
     /** Outer frame + raised body used by windows, toolbars and popovers. */
@@ -99,6 +182,10 @@ public final class RecipeTreeTheme {
         int width = right - left;
         int height = bottom - top;
         if (width <= 0 || height <= 0) {
+            return;
+        }
+        if (isClassicStyle()) {
+            drawFlatPanel(graphics, left, top, right, bottom, theme.chromeFill(), theme.chromeBorder());
             return;
         }
         graphics.fill(left, top, right, bottom, theme.chromeBorder());
@@ -121,6 +208,10 @@ public final class RecipeTreeTheme {
         if (width <= 0 || height <= 0) {
             return;
         }
+        if (isClassicStyle()) {
+            drawFlatPanel(graphics, left, top, right, bottom, theme.background(), theme.chromeBorder());
+            return;
+        }
         graphics.fill(left, top, right, bottom, theme.chromeBorder());
         if (width <= 2 || height <= 2) {
             return;
@@ -141,6 +232,10 @@ public final class RecipeTreeTheme {
             return;
         }
         Palette theme = current();
+        if (isClassicStyle()) {
+            drawFlatPanel(graphics, left, top, right, bottom, fill, border);
+            return;
+        }
         graphics.fill(left, top, right, bottom, border);
         if (width <= 2 || height <= 2) {
             return;
@@ -159,6 +254,15 @@ public final class RecipeTreeTheme {
             return;
         }
         Palette theme = current();
+        if (isClassicStyle()) {
+            // Ink outline stays uniform; state reads from a stripe so the canvas keeps a
+            // drafted look instead of a grid of saturated outlines.
+            drawFlatPanel(graphics, left, top, right, bottom, theme.nodeFill(), theme.nodeBorder());
+            if (right - left > 5) {
+                graphics.fill(left + 1, top + 1, left + 3, bottom - 1, accent);
+            }
+            return;
+        }
         int fill = isNexStyle() ? 0xFFF7F7F5 : theme.nodeFill();
         graphics.fill(left, top, right, bottom, accent);
         graphics.fill(left + 1, top + 1, right - 1, bottom - 1, fill);
@@ -167,6 +271,10 @@ public final class RecipeTreeTheme {
     /** Triple-border framed panel used by popovers and the top-materials strip. */
     public static void drawFramedPanel(GuiGraphics graphics, int left, int top, int right, int bottom) {
         Palette theme = current();
+        if (isClassicStyle()) {
+            drawFlatPanel(graphics, left, top, right, bottom, theme.panelInner(), theme.panelBorder());
+            return;
+        }
         graphics.fill(left, top, right, bottom, theme.panelBorder());
         if (right - left <= 4 || bottom - top <= 4) {
             return;
@@ -184,6 +292,10 @@ public final class RecipeTreeTheme {
     /** AE2-style sunken 18×18 item slot. */
     public static void drawSlot(GuiGraphics graphics, int x, int y) {
         Palette theme = current();
+        if (isClassicStyle()) {
+            drawFlatPanel(graphics, x, y, x + 18, y + 18, theme.slotInner(), theme.slotBorder());
+            return;
+        }
         graphics.fill(x, y, x + 18, y + 18, theme.slotBorder());
         graphics.fill(x + 1, y + 1, x + 17, y + 17, theme.slotInner());
         // sunken bevel
@@ -209,6 +321,12 @@ public final class RecipeTreeTheme {
             }
             return;
         }
+        if (isClassicStyle()) {
+            int classicBorder = !active ? theme.mutedText() : (hovered ? theme.accent() : theme.controlBorder());
+            int classicFill = !active ? theme.chromeFill() : (hovered ? theme.controlHoverFill() : theme.controlFill());
+            drawFlatPanel(graphics, x, y, x + width, y + height, classicFill, classicBorder);
+            return;
+        }
         int border = !active ? theme.nodeBorder() : (hovered ? theme.accent() : theme.controlBorder());
         int fill = !active ? theme.panelInner() : (hovered ? theme.controlHoverFill() : theme.controlFill());
         graphics.fill(x, y, x + width, y + height, border);
@@ -224,6 +342,51 @@ public final class RecipeTreeTheme {
 
     public static void drawSmallControl(GuiGraphics graphics, int x, int y, int size, boolean hovered) {
         drawButton(graphics, x, y, size, size, hovered, true);
+    }
+
+    /**
+     * Ruled grid paper behind the graph. Spacing follows the logical grid through
+     * the current pan/zoom so the paper travels with the tree, and thin lines drop
+     * out once they would alias into each other.
+     */
+    public static void drawBlueprintGrid(GuiGraphics graphics, int left, int top, int right, int bottom,
+            double panX, double panY, double zoom) {
+        if (right - left <= 0 || bottom - top <= 0 || zoom <= 0.0D) {
+            return;
+        }
+        Palette theme = current();
+        double step = GRID_LOGICAL_STEP * zoom;
+        if (step <= 0.0D) {
+            return;
+        }
+        boolean thinLines = step >= 3.0D;
+        double majorStep = step * GRID_MAJOR_EVERY;
+        drawGridAxis(graphics, left, top, right, bottom, panX, majorStep, true, theme.gridMajorLine());
+        drawGridAxis(graphics, left, top, right, bottom, panY, majorStep, false, theme.gridMajorLine());
+        if (!thinLines) {
+            return;
+        }
+        drawGridAxis(graphics, left, top, right, bottom, panX, step, true, theme.gridLine());
+        drawGridAxis(graphics, left, top, right, bottom, panY, step, false, theme.gridLine());
+    }
+
+    private static void drawGridAxis(GuiGraphics graphics, int left, int top, int right, int bottom,
+            double pan, double step, boolean vertical, int color) {
+        double axisStart = vertical ? left : top;
+        double axisEnd = vertical ? right : bottom;
+        // First gridline at or after the viewport edge, expressed in screen space.
+        double firstIndex = Math.ceil((axisStart - pan) / step);
+        for (double position = pan + firstIndex * step; position < axisEnd; position += step) {
+            int line = (int) Math.round(position);
+            if (line < axisStart || line >= axisEnd) {
+                continue;
+            }
+            if (vertical) {
+                graphics.fill(line, top, line + 1, bottom, color);
+            } else {
+                graphics.fill(left, line, right, line + 1, color);
+            }
+        }
     }
 
     public static void drawBorder(GuiGraphics graphics, int left, int top, int right, int bottom, int color) {
@@ -283,6 +446,12 @@ public final class RecipeTreeTheme {
             int controlHoverText,
             int bevelDark,
             int bevelLight,
+            int modifiedAccent,
+            int focusHighlight,
+            int linkText,
+            int onControlText,
+            int slotOverlayText,
+            int noticeBackground,
             int[] groupColors) {
         public int groupColor(int index) {
             return groupColors[index % groupColors.length];

@@ -137,6 +137,15 @@ public final class RecipeTreeJeiLookup {
         return handle == null ? Optional.empty() : createLayout(runtime, handle);
     }
 
+    /** Resolves the raw category/recipe pair for a node so callers can drive JEI's recipe transfer API. */
+    public static Optional<RecipeHandle> findRecipeHandle(@Nullable RecipeTreeRecipeViewModel recipe) {
+        if (recipe == null || recipe.recipeId() == null) return Optional.empty();
+        IJeiRuntime runtime = JeiCraftingTreePlugin.getJeiRuntime();
+        if (runtime == null) return Optional.empty();
+        ensureRecipeIdIndex(runtime);
+        return Optional.ofNullable(RECIPE_ID_INDEX.get(recipe.recipeId()));
+    }
+
     @SuppressWarnings({ "rawtypes", "unchecked" })
     private static Optional<IRecipeLayoutDrawable<?>> createLayout(IJeiRuntime runtime, RecipeHandle handle) {
         IFocusFactory focusFactory = runtime.getJeiHelpers().getFocusFactory();
@@ -249,7 +258,8 @@ public final class RecipeTreeJeiLookup {
         return createSnapshotForRecipeTyped(runtime, category, recipe, preferredOutput);
     }
 
-    private record RecipeHandle(IRecipeCategory<?> category, Object recipe) {
+    /** The raw JEI category plus recipe object behind a tree node, as recipe transfer handlers expect them. */
+    public record RecipeHandle(IRecipeCategory<?> category, Object recipe) {
     }
 
     private static <T> Optional<RecipeTreeRecipeViewModel> createSnapshotForRecipeTyped(IJeiRuntime runtime,

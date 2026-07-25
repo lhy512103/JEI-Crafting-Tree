@@ -19,11 +19,18 @@ public final class CraftingTreeInventorySources {
     }
 
     public static void register(InventorySource source) {
-        if (source == null) return;
-        unregister(safeId(source));
+        registerWithHandle(source);
+    }
+
+    /** Registers a source and returns an idempotent handle for client shutdown or reload. */
+    public static ApiRegistration registerWithHandle(InventorySource source) {
+        if (source == null) return ApiRegistration.NOOP;
+        String id = safeId(source);
+        unregister(id);
         SOURCES.add(source);
         SOURCES.sort(Comparator.comparingInt(CraftingTreeInventorySources::safePriority).reversed()
                 .thenComparing(CraftingTreeInventorySources::safeId));
+        return () -> SOURCES.remove(source);
     }
 
     public static void unregister(String id) {
@@ -36,8 +43,9 @@ public final class CraftingTreeInventorySources {
 
     public static InventorySnapshot aggregate() {
         Map<MaterialKey, Long> amounts = new LinkedHashMap<>();
+        java.util.Set<String> authoritativeGroups = new java.util.HashSet<>();
         for (InventorySource source : SOURCES) {
-            if (!safeAvailable(source)) continue;
+            if (!safeAvailable(source) || !authoritativeGroups.add(safeAuthorityGroup(source))) continue;
             for (InventoryAmount entry : safeSnapshot(source)) {
                 if (entry != null && entry.material() != null && entry.amount() > 0L) {
                     amounts.merge(entry.material(), entry.amount(), RecipePlanSolver::saturatedAdd);
@@ -51,6 +59,7 @@ public final class CraftingTreeInventorySources {
         long version = 1L;
         for (InventorySource source : SOURCES) {
             version = 31L * version + safeId(source).hashCode();
+            version = 31L * version + safeAuthorityGroup(source).hashCode();
             version = 31L * version + safePriority(source);
             try {
                 version = 31L * version + source.version();
@@ -83,6 +92,15 @@ public final class CraftingTreeInventorySources {
         } catch (RuntimeException ignored) {
         }
         return source.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(source));
+    }
+
+    private static String safeAuthorityGroup(InventorySource source) {
+        try {
+            String group = source.authorityGroup();
+            if (group != null && !group.isBlank()) return group;
+        } catch (RuntimeException ignored) {
+        }
+        return safeId(source);
     }
 
     private static int safePriority(InventorySource source) {

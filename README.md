@@ -215,6 +215,8 @@ CraftingTreeInventorySources.register(new InventorySource() {
 
 `version()` should change only when visible stock changes. `snapshot()` should return an immutable or safely copied view. Material identities use `MaterialKey`, which includes the JEI ingredient type and subtype-aware UID.
 
+The stable API is bundled with the main jar (current major: `1`). New integrations should use named registrations with `ApiRegistration` handles, `authorityGroup()` for mutually visible storage, and `CraftingTreeMenuInventorySources` for an open menu. Full lifecycle, thread, compatibility, menu, and auto-crafting constraints are documented in [docs/API.md](docs/API.md).
+
 ### Requirements
 
 JEI Crafting Tree is a client-side mod. Install it on the client together with JEI; dedicated servers do not
@@ -405,6 +407,8 @@ NeoForge 会将配置写入 `config/jeict-client.toml`。
 #### 库存来源
 
 外部存储系统可以实现 `InventorySource`，并通过 `CraftingTreeInventorySources.register(...)` 注册。来源应提供稳定 ID、优先级、库存版本和不可变快照。库存版本只应在规划器可见库存发生变化时更新。
+
+稳定 API 与主 jar 同发，当前主版本为 `1`。新集成应使用具名注册和 `ApiRegistration` 注销句柄；同一可见存储使用相同的 `authorityGroup()` 防止重复统计；当前菜单库存使用 `CraftingTreeMenuInventorySources`。完整的依赖方式、生命周期、线程限制、菜单扩展和自动合成边界见 [docs/API.md](docs/API.md)。
 
 ### 运行要求
 

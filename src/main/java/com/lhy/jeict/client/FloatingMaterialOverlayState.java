@@ -10,7 +10,9 @@ import org.jetbrains.annotations.Nullable;
 import com.lhy.jeict.config.RecipeTreeConfig;
 import com.lhy.jeict.jei.JeiCraftingTreePlugin;
 import com.lhy.jeict.recipe_tree.RecipeTreeRootContext;
+import com.lhy.jeict.planning.MaterialKey;
 import com.lhy.jeict.util.GenericIngredientUtil;
+import com.lhy.jeict.util.IngredientIdentityUtil;
 import com.mojang.blaze3d.platform.InputConstants;
 
 import mezz.jei.api.gui.drawable.IDrawable;
@@ -30,7 +32,6 @@ import net.minecraft.client.gui.screens.ChatScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
 import net.neoforged.neoforge.client.event.InputEvent;
@@ -40,6 +41,7 @@ import net.neoforged.neoforge.fluids.FluidStack;
 public final class FloatingMaterialOverlayState {
     private static final int BASE_WIDTH = 168;
     private static final int HEADER_HEIGHT = 20;
+    private static final int FOOTER_HEIGHT = 16;
     private static final int CONTROL_SIZE = 12;
     private static final int SCROLLBAR_WIDTH = 4;
     private static final int MAX_CONTENT_HEIGHT = 240;
@@ -57,6 +59,10 @@ public final class FloatingMaterialOverlayState {
     private static final float JEI_BOOKMARK_Z = 200.0F;
     private static final float OVERLAY_Z = JEI_BOOKMARK_Z + 1.0F;
     private static final float TOOLTIP_Z = OVERLAY_Z + 400.0F;
+    private static final int AUTO_CRAFT_WIDTH = 46;
+    private static final int AUTO_CRAFT_LEFT = BASE_WIDTH - CONTENT_PADDING - AUTO_CRAFT_WIDTH;
+    private static final Component AUTO_CRAFT_LABEL =
+            Component.translatable("gui.jeict.recipe_tree.floating_auto_craft_label");
     private static final ResourceLocation MICRO_AMOUNT_FONT = ResourceLocation.withDefaultNamespace("uniform");
 
     private static Snapshot snapshot;
@@ -76,8 +82,7 @@ public final class FloatingMaterialOverlayState {
     private static boolean showAll;
     private static long lastTitleClickTime;
     private static List<DisplayGroup> cachedDisplayGroups = List.of();
-    private static @Nullable Inventory cachedInventory;
-    private static int cachedInventoryVersion = Integer.MIN_VALUE;
+    private static long cachedInventoryVersion = Long.MIN_VALUE;
     private static boolean cachedShowAll;
     private static boolean displayEntriesDirty = true;
 
@@ -103,8 +108,7 @@ public final class FloatingMaterialOverlayState {
         scrollOffset = 0;
         maxScrollOffset = 0;
         cachedDisplayGroups = List.of();
-        cachedInventory = null;
-        cachedInventoryVersion = Integer.MIN_VALUE;
+        cachedInventoryVersion = Long.MIN_VALUE;
         displayEntriesDirty = true;
     }
 
@@ -126,9 +130,9 @@ public final class FloatingMaterialOverlayState {
 
         int totalContentHeight = computeTotalContentHeight(displayGroups);
         int visibleContentHeight = MAX_CONTENT_HEIGHT;
-        int contentHeight = HEADER_HEIGHT + 4 + Math.min(totalContentHeight, visibleContentHeight) + 4;
-        int height = Math.min(260, contentHeight);
-        int actualVisibleContentHeight = height - HEADER_HEIGHT - 8;
+        int contentHeight = HEADER_HEIGHT + 4 + Math.min(totalContentHeight, visibleContentHeight) + 4 + FOOTER_HEIGHT;
+        int height = Math.min(260 + FOOTER_HEIGHT, contentHeight);
+        int actualVisibleContentHeight = height - HEADER_HEIGHT - 8 - FOOTER_HEIGHT;
         maxScrollOffset = Math.max(0, totalContentHeight - actualVisibleContentHeight);
         scrollOffset = Math.min(scrollOffset, maxScrollOffset);
         scrollOffset = Math.max(0, scrollOffset);
@@ -162,14 +166,15 @@ public final class FloatingMaterialOverlayState {
         Component hoveredMachineName = null;
 
         int contentTop = HEADER_HEIGHT + 4;
+        int contentBottom = height - 4 - FOOTER_HEIGHT;
         int groupX = CONTENT_PADDING;
         int groupY = contentTop - scrollOffset;
         for (DisplayGroup group : displayGroups) {
             int groupBottom = groupY + group.height();
-            if (groupBottom > contentTop && groupY < height - 4) {
+            if (groupBottom > contentTop && groupY < contentBottom) {
                 boolean groupHovered = localMouseX >= groupX && localMouseX < groupX + GROUP_WIDTH
                         && localMouseY >= groupY && localMouseY < groupBottom
-                        && localMouseY >= contentTop && localMouseY < height - 4;
+                        && localMouseY >= contentTop && localMouseY < contentBottom;
                 RecipeTreeTheme.drawMarkdownNode(graphics, groupX, groupY, groupX + GROUP_WIDTH, groupBottom,
                         theme.accent());
                 if (group.machineIcon() != null) {
@@ -210,7 +215,7 @@ public final class FloatingMaterialOverlayState {
         if (maxScrollOffset > 0) {
             int trackX = BASE_WIDTH - SCROLLBAR_WIDTH - 2;
             int trackTop = contentTop;
-            int trackBottom = height - 4;
+            int trackBottom = contentBottom;
             int trackHeight = trackBottom - trackTop;
             if (trackHeight > 0) {
                 graphics.fill(trackX, trackTop, trackX + 2, trackBottom, theme.scrollbarTrack());
@@ -221,6 +226,19 @@ public final class FloatingMaterialOverlayState {
                 graphics.fill(trackX - 1, thumbY, trackX + SCROLLBAR_WIDTH, thumbY + thumbHeight, theme.scrollbarThumb());
             }
         }
+
+        int craftY = autoCraftButtonTop(height);
+        boolean craftHovered = localMouseX >= AUTO_CRAFT_LEFT && localMouseX < AUTO_CRAFT_LEFT + AUTO_CRAFT_WIDTH
+                && localMouseY >= craftY && localMouseY < craftY + CONTROL_SIZE;
+        boolean autoCraftRunning = RecipeTreeAutoCraftSession.status().running();
+        RecipeTreeTheme.drawButton(graphics, AUTO_CRAFT_LEFT, craftY, AUTO_CRAFT_WIDTH, CONTROL_SIZE,
+                craftHovered, true);
+        Component autoCraftLabel = autoCraftRunning
+                ? Component.translatable("gui.jeict.recipe_tree.floating_auto_craft_stop_label")
+                : AUTO_CRAFT_LABEL;
+        int craftTextY = craftY + Math.max(0, (CONTROL_SIZE - font.lineHeight) / 2);
+        graphics.drawCenteredString(font, autoCraftLabel, AUTO_CRAFT_LEFT + AUTO_CRAFT_WIDTH / 2, craftTextY,
+                craftHovered ? theme.controlHoverText() : theme.controlText());
 
         graphics.pose().popPose();
 
@@ -382,7 +400,13 @@ public final class FloatingMaterialOverlayState {
             return true;
         }
 
-        if (localY >= HEADER_HEIGHT && localY < lastHeight) {
+        if (button == 0 && isOverAutoCraftButton(localX, localY)) {
+            runAutoCraft();
+            cancel(event);
+            return true;
+        }
+
+        if (localY >= HEADER_HEIGHT && localY < lastHeight - FOOTER_HEIGHT) {
             if (handleContentClick(localX, localY, button)) {
                 cancel(event);
                 return true;
@@ -409,6 +433,38 @@ public final class FloatingMaterialOverlayState {
 
         cancel(event);
         return true;
+    }
+
+    public static boolean isAutoCraftButtonAt(double mouseX, double mouseY) {
+        if (!contains(mouseX, mouseY)) {
+            return false;
+        }
+        return isOverAutoCraftButton((mouseX - x) / scale, (mouseY - y) / scale);
+    }
+
+    private static int autoCraftButtonTop(int height) {
+        return height - FOOTER_HEIGHT - 1;
+    }
+
+    private static boolean isOverAutoCraftButton(double localX, double localY) {
+        int craftY = autoCraftButtonTop(lastHeight);
+        return localX >= AUTO_CRAFT_LEFT && localX < AUTO_CRAFT_LEFT + AUTO_CRAFT_WIDTH
+                && localY >= craftY && localY < craftY + CONTROL_SIZE;
+    }
+
+    private static void runAutoCraft() {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.player == null) {
+            return;
+        }
+        boolean wasRunning = RecipeTreeAutoCraftSession.status().running();
+        boolean running = RecipeTreeAutoCraftSession.toggle(snapshot == null ? null : snapshot.context());
+        Component message = running
+                ? Component.translatable("message.jeict.auto_craft_started")
+                : wasRunning
+                        ? Component.translatable("message.jeict.auto_craft_cancelled")
+                        : Component.translatable("message.jeict.auto_craft_unavailable");
+        minecraft.player.displayClientMessage(message, true);
     }
 
     private static boolean handleContentClick(double localX, double localY, int button) {
@@ -569,38 +625,45 @@ public final class FloatingMaterialOverlayState {
     }
 
     private static List<DisplayGroup> displayGroups() {
-        Minecraft minecraft = Minecraft.getInstance();
-        Inventory inventory = minecraft.player == null ? null : minecraft.player.getInventory();
-        int inventoryVersion = inventory == null ? -1 : inventory.getTimesChanged();
-        if (!displayEntriesDirty && inventory == cachedInventory
-                && inventoryVersion == cachedInventoryVersion && showAll == cachedShowAll) {
+        long inventoryVersion = ClientInventorySnapshotCache.version();
+        if (!displayEntriesDirty && inventoryVersion == cachedInventoryVersion && showAll == cachedShowAll) {
             return cachedDisplayGroups;
         }
+        var inventory = ClientInventorySnapshotCache.get();
         Map<String, MutableDisplayGroup> grouped = new LinkedHashMap<>();
         for (Entry entry : snapshot.entries()) {
-            boolean itemEntry = !entry.stack().isEmpty();
-            int available = itemEntry ? getItemCountInInventory(inventory, entry.stack()) : 0;
-            int remaining = Math.max(0, entry.count() - available);
-            if (itemEntry && !showAll && remaining <= 0) {
+            long available = availableAmount(inventory, entry);
+            long remaining = Math.max(0L, (long) entry.count() - available);
+            if (!entry.stack().isEmpty() && !showAll && remaining <= 0L) {
                 continue;
             }
-            int color = remaining <= 0 ? 0xFF00918E : 0xFF911300;
             Component badgeText = Component.literal(formatEntryAmount(entry, remaining).replace(" ", ""))
                     .withStyle(style -> style.withFont(MICRO_AMOUNT_FONT));
             grouped.computeIfAbsent(entry.machineKey(), ignored -> new MutableDisplayGroup(entry))
-                    .entries.add(new DisplayEntry(entry, Math.min(available, entry.count()), remaining, color,
-                            badgeText));
+                    .entries.add(new DisplayEntry(entry, Math.min(available, entry.count()), remaining, badgeText));
         }
         List<DisplayGroup> groups = new ArrayList<>(grouped.size());
         for (MutableDisplayGroup group : grouped.values()) {
             groups.add(group.freeze());
         }
         cachedDisplayGroups = List.copyOf(groups);
-        cachedInventory = inventory;
         cachedInventoryVersion = inventoryVersion;
         cachedShowAll = showAll;
         displayEntriesDirty = false;
         return cachedDisplayGroups;
+    }
+
+    private static long availableAmount(com.lhy.jeict.planning.InventorySnapshot inventory, Entry entry) {
+        IJeiRuntime runtime = JeiCraftingTreePlugin.getJeiRuntime();
+        if (runtime == null) return 0L;
+        ITypedIngredient<?> ingredient = entry.ingredient();
+        if (ingredient == null && !entry.stack().isEmpty()) {
+            ingredient = runtime.getIngredientManager().createTypedIngredient(entry.stack().copyWithCount(1), true)
+                    .orElse(null);
+        }
+        if (ingredient == null) return 0L;
+        MaterialKey key = IngredientIdentityUtil.keyOf(runtime.getIngredientManager(), ingredient);
+        return inventory.amount(key);
     }
 
     private static int groupHeight(int entryCount) {
@@ -617,6 +680,9 @@ public final class FloatingMaterialOverlayState {
     }
 
     private static @Nullable Component controlTooltipAt(double localMouseX, double localMouseY) {
+        if (isOverAutoCraftButton(localMouseX, localMouseY)) {
+            return Component.translatable("gui.jeict.recipe_tree.floating_auto_craft_tooltip");
+        }
         if (localMouseY < 5 || localMouseY > 17) {
             return null;
         }
@@ -673,13 +739,14 @@ public final class FloatingMaterialOverlayState {
         graphics.pose().pushPose();
         graphics.pose().translate(textX, textY, 300.0F);
         graphics.pose().scale(textScale, textScale, 1.0F);
-        graphics.drawString(font, label, 1, 1, entry.color(), false);
-        graphics.drawString(font, label, 0, 0, 0xFFFFFFFF, false);
+        RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
+        graphics.drawString(font, label, 1, 1, entry.remaining() <= 0 ? theme.enough() : theme.missing(), false);
+        graphics.drawString(font, label, 0, 0, theme.slotOverlayText(), false);
         graphics.pose().popPose();
     }
 
-    private static String formatEntryAmount(Entry entry, int amount) {
-        int safeAmount = Math.max(0, amount);
+    private static String formatEntryAmount(Entry entry, long amount) {
+        long safeAmount = Math.max(0L, amount);
         ITypedIngredient<?> ingredient = entry.ingredient();
         if (usesMilliBucketUnits(entry)) {
             if (safeAmount < 1000) {
@@ -714,9 +781,9 @@ public final class FloatingMaterialOverlayState {
         return renderFluid;
     }
 
-    private static String formatCompactCount(int count) {
+    private static String formatCompactCount(long count) {
         if (count < 1000) {
-            return Integer.toString(count);
+            return Long.toString(count);
         }
         double value = count;
         String[] suffixes = { "K", "M", "B" };
@@ -726,7 +793,7 @@ public final class FloatingMaterialOverlayState {
             suffixIndex++;
         }
         if (value >= 100.0D || Math.abs(value - Math.round(value)) < 0.05D) {
-            return ((int) Math.round(value)) + suffixes[suffixIndex];
+            return Math.round(value) + suffixes[suffixIndex];
         }
         return String.format(java.util.Locale.ROOT, "%.1f%s", value, suffixes[suffixIndex]);
     }
@@ -760,27 +827,13 @@ public final class FloatingMaterialOverlayState {
         return new ArrayList<>(renderer.getTooltip(typed.getIngredient(), TooltipFlag.Default.NORMAL));
     }
 
-    private static int getItemCountInInventory(@Nullable Inventory inventory, ItemStack stack) {
-        if (inventory == null) {
-            return 0;
-        }
-        int count = 0;
-        for (int i = 0; i < inventory.getContainerSize(); i++) {
-            ItemStack invStack = inventory.getItem(i);
-            if (ItemStack.isSameItemSameComponents(stack, invStack)) {
-                count += invStack.getCount();
-            }
-        }
-        return count;
-    }
-
     public record Snapshot(List<Entry> entries, @Nullable RecipeTreeRootContext context) {
         public Snapshot {
             entries = List.copyOf(entries);
         }
     }
 
-    private record DisplayEntry(Entry source, int available, int remaining, int color, Component badgeText) {
+    private record DisplayEntry(Entry source, long available, long remaining, Component badgeText) {
     }
 
     private record DisplayGroup(@Nullable IDrawable machineIcon, @Nullable Component machineName,
