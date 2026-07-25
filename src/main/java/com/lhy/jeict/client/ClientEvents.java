@@ -40,9 +40,11 @@ public final class ClientEvents {
     public static void onScreenRenderPost(ScreenEvent.Render.Post event) {
         FloatingMaterialOverlayState.updateDrag();
         FloatingMaterialOverlayState.render(event.getGuiGraphics());
+        JeiRecipeTreeShortcutOverlay.render(event);
     }
 
     public static void onScreenMousePressed(ScreenEvent.MouseButtonPressed.Pre event) {
+        if (JeiRecipeTreeShortcutOverlay.handleMousePressed(event)) return;
         FloatingMaterialOverlayState.handleScreenMouseClicked(event);
     }
 

@@ -29,6 +29,7 @@ The planning model is independent from AE2. Optional backends such as AE2 Utilit
 #### Global multi-project planning
 
 - Maintains multiple named production targets in one session.
+- Supports a spatial multi-tree workspace: complete trees are rendered together on one shared canvas and every visible tree can be edited directly without switching views. New independent trees can be added above, below, left, or right, and the JEI bookmark-side shortcut returns to the last workspace. Each tree owns a separate material, surplus, draft, history, and planning state.
 - Uses a shared global material ledger across all projects.
 - Reuses overproduction from one branch or project in another branch or project.
 - Credits secondary outputs and byproducts back to the global supply pool.
@@ -264,6 +265,7 @@ JEI Crafting Tree 是面向 Minecraft 1.21.1 / NeoForge 的 JEI 配方规划扩�
 ### 主要功能
 
 - **递归配方树**：逐层展开原料配方，支持普通图形视图与同层材料合并视图；同一材料在不同深度出现时，会同步配方选择和手动折叠状态。
+- **多配方树工作区**：多棵完整配方树会同时显示在同一个可缩放、可拖动的画布中，每棵树都能在原位置直接选择配方、折叠分支、打开节点详情和编辑样板，无需切换当前树。可从远离树体的上、下、左、右纯文字入口添加新树；JEI 书签区旁的快捷按钮可返回上次工作区。每棵树的总材料、剩余材料、项目、样板草稿、编辑历史和规划结果完全隔离。
 - **全局材料账本**：所有项目和分支共享库存、余料与副产物，避免按节点重复统计。
 - **多目标项目**：可以建立多个命名目标、设置 `long` 类型目标数量，并在项目之间切换编辑。
 - **多输出与副产物**：读取 JEI 暴露的全部输出，将次要输出重新计入全局供给。
