@@ -10,6 +10,7 @@ import com.lhy.jeict.api.InventoryAmount;
 import com.lhy.jeict.api.InventorySource;
 import com.lhy.jeict.api.MenuInventorySource;
 import com.lhy.jeict.compat.ae2.Ae2CompatBootstrap;
+import com.lhy.jeict.compat.sophisticated.SophisticatedCompatBootstrap;
 import com.lhy.jeict.jei.JeiCraftingTreePlugin;
 import com.lhy.jeict.planning.MaterialKey;
 import com.lhy.jeict.planning.RecipePlanSolver;
@@ -29,6 +30,7 @@ public final class ClientInventorySources {
         registered = true;
         ClientMenuInventoryProviders.register(new SlotMenuInventoryProvider());
         Ae2CompatBootstrap.registerIfLoaded();
+        SophisticatedCompatBootstrap.registerIfLoaded();
         CraftingTreeInventorySources.register(new ClientInventorySource());
     }
 

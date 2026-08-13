@@ -176,6 +176,10 @@ public final class RecipeTreeRootContext {
         if (!RecipeTreeConfig.REMEMBER_SELECTIONS.get()) return;
         String scoped = com.lhy.jeict.client.RecipeTreeMemoryKey.of(parent, inputIndex, input, legacySignature);
         RecipeTreeClientMemory.rememberSelection(scoped, recipe);
+        // 材料级兜底：位置键只在该父配方/槽位命中，同一材料出现在树的其他位置时读取会落空。
+        // 读取侧（getRememberedSelection 的 legacy 降级）会先查位置键、未命中再按材料签名兜底，
+        // 因此这里始终把最新选择同步一份到材料级键，让新展开的分支也能自动展开。
+        RecipeTreeClientMemory.rememberSelection(legacySignature, recipe);
     }
 
     public @Nullable RecipeTreeRecipeViewModel getRememberedSelection(RecipeTreeNodeViewModel parent, int inputIndex,

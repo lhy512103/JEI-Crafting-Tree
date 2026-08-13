@@ -38,6 +38,7 @@ import com.lhy.jeict.client.RecipeTreeWorkspaceSession.GridPosition;
 import com.lhy.jeict.recipe_tree.RequestedIngredient;
 import com.lhy.jeict.util.GenericIngredientUtil;
 import com.lhy.jeict.planning.InventorySnapshot;
+import com.lhy.jeict.planning.MaterialKey;
 import com.lhy.jeict.planning.RecipePlanResult;
 import com.lhy.jeict.planning.PlanTarget;
 import com.lhy.jeict.planning.RecipeTreePlanAdapter;
@@ -846,7 +847,12 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private record LayerTraversalKey(RecipeTreeNodeViewModel node, int depth) {
     }
 
-    private record LayerMaterialKey(int kind, String ingredientSignature, @Nullable String expansionSignature) {
+    /**
+     * 层视图按「当前展示物品」聚合：中间产物（kind=0）与叶子输入（kind=1）不再分开，
+     * 有候选/无候选、NBT 差异等展示为同一物品时归并。expansionSignature 保留以区分
+     * 同一物品的不同展开/未展开状态。
+     */
+    private record LayerMaterialKey(String ingredientSignature, @Nullable String expansionSignature) {
     }
 
     private record CachedLayerMaterialKey(int alternativeIndex, @Nullable RecipeTreeNodeViewModel child,
@@ -1130,7 +1136,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                     ? id.toString()
                     : child.recipe().title().getString() + "|" + signatureOf(child.recipe().primaryOutputIngredient());
         }
-        LayerMaterialKey key = new LayerMaterialKey(1, leafSignatureOf(input), expansionSignature);
+        LayerMaterialKey key = new LayerMaterialKey(displayIngredientSignatureOf(input), expansionSignature);
         leafLayerKeyCache.put(input, new CachedLayerMaterialKey(alternativeIndex, child, key));
         return key;
     }
@@ -1141,8 +1147,8 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             return cached;
         }
         ITypedIngredient<?> ingredient = node.recipe().primaryOutputIngredient();
-        LayerMaterialKey key = new LayerMaterialKey(0,
-                ingredient != null ? signatureOf(ingredient) : signatureOfNode(node), null);
+        LayerMaterialKey key = new LayerMaterialKey(
+                ingredient != null ? displayIngredientSignatureOf(ingredient) : signatureOfNode(node), null);
         recipeLayerKeyCache.put(node, key);
         return key;
     }
@@ -1183,19 +1189,40 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         Map<String, ItemTopMaterialAccumulator> itemMaterials = new LinkedHashMap<>();
         Map<String, GenericTopMaterialAccumulator> genericMaterials = new LinkedHashMap<>();
         collectGenericTopMaterials(context.root(), batchCount, itemMaterials, genericMaterials);
-        List<RequestedIngredient> rebuiltTopMaterials = new ArrayList<>(itemMaterials.size());
+        // 同一材料以「多候选」与「单候选/其他形态」出现时，签名不同会分成两条；
+        // 按展示物品归一化签名重新分桶，跨桶合并到同一条（保留多候选语义与 slots 索引）。
+        Map<String, List<ItemTopMaterialAccumulator>> normalizedItemGroups = new LinkedHashMap<>();
         for (Map.Entry<String, ItemTopMaterialAccumulator> entry : itemMaterials.entrySet()) {
             ItemTopMaterialAccumulator accumulator = entry.getValue();
+            String normalized = displayIngredientSignatureOf(accumulator.representative());
+            normalizedItemGroups.computeIfAbsent(normalized, ignored -> new ArrayList<>()).add(accumulator);
+        }
+        Map<String, List<GenericTopMaterialAccumulator>> normalizedGenericGroups = new LinkedHashMap<>();
+        for (Map.Entry<String, GenericTopMaterialAccumulator> entry : genericMaterials.entrySet()) {
+            GenericTopMaterialAccumulator accumulator = entry.getValue();
+            String normalized = displayIngredientSignatureOf(accumulator.representative());
+            normalizedGenericGroups.computeIfAbsent(normalized, ignored -> new ArrayList<>()).add(accumulator);
+        }
+        List<RequestedIngredient> rebuiltTopMaterials = new ArrayList<>();
+        for (List<ItemTopMaterialAccumulator> group : normalizedItemGroups.values()) {
+            ItemTopMaterialAccumulator accumulator = group.size() == 1 ? group.get(0)
+                    : ItemTopMaterialAccumulator.merge(group);
             RequestedIngredient material = accumulator.toRequestedIngredient();
             rebuiltTopMaterials.add(material);
-            unresolvedInputsBySignature.put(entry.getKey(), accumulator.slots());
+            for (ItemTopMaterialAccumulator member : group) {
+                unresolvedInputsBySignature.put(member.entryKey(), member.slots());
+            }
             unresolvedInputsBySignature.put(signatureOf(material), accumulator.slots());
         }
         topMaterials = List.copyOf(rebuiltTopMaterials);
         List<GenericTopMaterialRenderData> result = new ArrayList<>(genericMaterials.size());
-        for (GenericTopMaterialAccumulator accumulator : genericMaterials.values()) {
+        for (List<GenericTopMaterialAccumulator> group : normalizedGenericGroups.values()) {
+            GenericTopMaterialAccumulator accumulator = group.size() == 1 ? group.get(0)
+                    : group.get(0).merge(group);
             MergedLeaf leaf = accumulator.toLeaf();
-            unresolvedInputsBySignature.put(leafSignatureOf(leaf.representative()), accumulator.slots());
+            for (GenericTopMaterialAccumulator member : group) {
+                unresolvedInputsBySignature.put(member.entryKey(), member.slots());
+            }
             String label = computeRecipeQuantities
                     ? formatLayerMaterialAmountLabel(leaf.ingredient(), leaf.members(), leaf.totalAmount())
                     : "";
@@ -1244,11 +1271,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 RequestedIngredient requested = input.requestedIngredientView();
                 String signature = leafSignatureOf(input);
                 if (requested != null && !requested.alternatives().isEmpty()) {
-                    itemMaterials.computeIfAbsent(signature, ignored -> new ItemTopMaterialAccumulator(input))
+                    itemMaterials.computeIfAbsent(signature, ignored -> new ItemTopMaterialAccumulator(input, signature))
                             .add(input, node, amount);
                     continue;
                 }
-                genericMaterials.computeIfAbsent(signature, ignored -> new GenericTopMaterialAccumulator(input, node))
+                genericMaterials.computeIfAbsent(signature, ignored -> new GenericTopMaterialAccumulator(input, node, signature))
                         .add(input, node, amount);
             }
             if (multipleChildren != null) {
@@ -5785,6 +5812,28 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         return signature;
     }
 
+    /**
+     * 展示物品归一化签名：按「当前展示的物品/流体」聚合，忽略候选集合与 NBT 差异，
+     * 用于层视图把同一材料的不同出现形态（中间产物输出 vs 叶子输入、有候选 vs 无候选）
+     * 归并为一条。无法解析时退回原签名，保证兜底不合并。
+     */
+    private String displayIngredientSignatureOf(RecipeTreeInputViewModel input) {
+        ITypedIngredient<?> ingredient = resolveDisplayIngredient(input);
+        if (ingredient != null) {
+            return displayIngredientSignatureOf(ingredient);
+        }
+        return signatureOf(input);
+    }
+
+    private String displayIngredientSignatureOf(ITypedIngredient<?> ingredient) {
+        ItemStack itemStack = ingredient.getIngredient(VanillaTypes.ITEM_STACK)
+                .map(ItemStack::copy).orElse(ItemStack.EMPTY);
+        if (!itemStack.isEmpty()) {
+            return signatureOfItemType(itemStack);
+        }
+        return signatureOf(ingredient);
+    }
+
     private String signatureOf(ITypedIngredient<?> ingredient) {
         if (ingredient == null) {
             return "null";
@@ -6290,8 +6339,102 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         for (RecipeTreeInputViewModel member : pendingAlternativeSelection.members()) {
             member.selectAlternative(index);
         }
+        syncDraftAlternativesForMembers(pendingAlternativeSelection.members());
         pendingAlternativeSelection = null;
         rebuildLayout();
+    }
+
+    /**
+     * 替代品切换只改树输入的选择，已缓存的 draft 仍是切换前的快照；把改动同步进受影响的 draft，
+     * 避免上传/编码使用旧材料。只遍历被切换输入所在配方的节点，开销与一次布局重建同级。
+     */
+    private void syncDraftAlternativesForMembers(List<RecipeTreeInputViewModel> members) {
+        if (patternDrafts.isEmpty() || members.isEmpty()) {
+            return;
+        }
+        Set<RecipeTreeInputViewModel> changed = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+        changed.addAll(members);
+        ArrayDeque<RecipeTreeNodeViewModel> pending = new ArrayDeque<>();
+        Set<RecipeTreeNodeViewModel> visited = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+        pending.addLast(context.root());
+        while (!pending.isEmpty()) {
+            RecipeTreeNodeViewModel node = pending.removeLast();
+            if (!visited.add(node)) {
+                continue;
+            }
+            RecipeTreeRecipeViewModel recipe = node.recipe();
+            PatternEncodingDraft draft = patternDrafts.get(recipe.stableIdentity());
+            if (draft != null) {
+                boolean touched = false;
+                for (RecipeTreeInputViewModel input : recipe.inputs()) {
+                    if (changed.contains(input)) {
+                        touched = true;
+                        break;
+                    }
+                }
+                if (touched) {
+                    syncDraftAlternativesFromTree(draft, recipe);
+                }
+            }
+            for (RecipeTreeInputViewModel input : recipe.inputs()) {
+                if (input.child() != null) {
+                    pending.addLast(input.child());
+                }
+            }
+        }
+    }
+
+    /**
+     * 把树上当前选中的替代品写入 draft 对应槽位，保留用户在检查器里的其他编辑。
+     * 槽位定位与 fromRecipe 的构造规则一致：CRAFTING 按 patternSlotIndex 落位，否则按消费输入顺序追加。
+     */
+    private void syncDraftAlternativesFromTree(PatternEncodingDraft draft, RecipeTreeRecipeViewModel recipe) {
+        boolean crafting = draft.mode() == PatternEncodingMode.CRAFTING;
+        int appendIndex = 0;
+        int inputLimit = draft.mode().inputLimit();
+        for (RecipeTreeInputViewModel input : recipe.inputs()) {
+            if (!input.consumed()) {
+                continue;
+            }
+            PatternEncodingSlot slot;
+            int gridSlot = crafting ? input.patternSlotIndex() : -1;
+            if (gridSlot >= 0) {
+                slot = draft.input(gridSlot);
+            } else {
+                if (appendIndex >= inputLimit) {
+                    break;
+                }
+                slot = draft.input(appendIndex);
+                appendIndex++;
+            }
+            if (slot == null || !slot.hasAlternatives()) {
+                continue;
+            }
+            ITypedIngredient<?> selected = input.displayIngredient();
+            if (selected == null) {
+                continue;
+            }
+            int index = indexOfAlternative(slot.alternatives(), selected);
+            if (index >= 0) {
+                slot.setSelectedAlternative(index);
+            }
+        }
+    }
+
+    private int indexOfAlternative(List<ITypedIngredient<?>> alternatives, ITypedIngredient<?> target) {
+        for (int i = 0; i < alternatives.size(); i++) {
+            if (alternatives.get(i) == target) {
+                return i;
+            }
+        }
+        String targetSignature = signatureOf(target);
+        for (int i = 0; i < alternatives.size(); i++) {
+            ITypedIngredient<?> candidate = alternatives.get(i);
+            if (candidate != null && signatureOf(candidate).equals(targetSignature)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private int getAlternativeVisibleCount() {
@@ -6409,7 +6552,143 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                     leaf.totalAmount(), data.label(), parent.recipe().subtitleIcon(), parent.recipe().subtitle(),
                     machineKey(parent)));
         }
-        return new FloatingMaterialOverlayState.Snapshot(entries, context);
+        List<FloatingMaterialOverlayState.Task> tasks = new ArrayList<>();
+        Set<RecipeTreeNodeViewModel> path = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+        long rootRequired = saturatedLongMultiply(context.root().recipe().primaryOutputAmount(), Math.max(1L, batchCount));
+        tasks.add(createFloatingTask(context.root(), rootRequired, path, 0));
+        return new FloatingMaterialOverlayState.Snapshot(entries, tasks, context);
+    }
+
+    private FloatingMaterialOverlayState.Task createFloatingTask(RecipeTreeNodeViewModel node, long requiredOutput,
+            Set<RecipeTreeNodeViewModel> path, int depth) {
+        RecipeTreeRecipeViewModel recipe = node.recipe();
+        FloatingMaterialOverlayState.Entry output = floatingEntry(recipe.primaryOutput(), recipe.primaryOutputIngredient(),
+                requiredOutput, recipe.subtitleIcon(), recipe.subtitle(), machineKey(node));
+        MaterialKey outputKey = materialKeyOf(recipe.primaryOutputIngredient(), recipe.primaryOutput());
+        if (depth >= 128 || !path.add(node)) {
+            return new FloatingMaterialOverlayState.Task(recipe.stableIdentity(), output, outputKey, requiredOutput,
+                    recipe.primaryOutputAmount(), true, List.of());
+        }
+
+        Map<FloatingInputKey, FloatingInputAccumulator> grouped = new LinkedHashMap<>();
+        for (int inputIndex = 0; inputIndex < recipe.inputs().size(); inputIndex++) {
+            RecipeTreeInputViewModel input = recipe.inputs().get(inputIndex);
+            ITypedIngredient<?> ingredient = input.displayIngredient();
+            ItemStack stack = input.displayStack();
+            RecipeTreeNodeViewModel child = input.child();
+            MaterialKey materialKey = child == null
+                    ? materialKeyOf(ingredient, stack)
+                    : materialKeyOf(child.recipe().primaryOutputIngredient(), child.recipe().primaryOutput());
+            FloatingInputKey key = new FloatingInputKey(materialKey, child, input.consumed());
+            FloatingInputAccumulator accumulator = grouped.get(key);
+            if (accumulator == null) {
+                accumulator = new FloatingInputAccumulator(inputIndex, input, child, ingredient, stack, materialKey);
+                grouped.put(key, accumulator);
+            }
+            accumulator.add(input.longAmount());
+        }
+
+        List<FloatingMaterialOverlayState.Task> inputs = new ArrayList<>(grouped.size());
+        for (FloatingInputAccumulator groupedInput : grouped.values()) {
+            RecipeTreeNodeViewModel child = groupedInput.child();
+            long amountPerCraft = groupedInput.amount();
+            if (child != null) {
+                FloatingMaterialOverlayState.Task childTask = createFloatingTask(child, amountPerCraft, path, depth + 1);
+                inputs.add(new FloatingMaterialOverlayState.Task(childTask.identity(), childTask.output(),
+                        childTask.outputKey(), amountPerCraft, childTask.outputPerCraft(), groupedInput.input().consumed(),
+                        childTask.inputs()));
+                continue;
+            }
+            FloatingMaterialOverlayState.Entry leaf = floatingEntry(groupedInput.stack(), groupedInput.ingredient(),
+                    amountPerCraft, recipe.subtitleIcon(), recipe.subtitle(), machineKey(node));
+            inputs.add(new FloatingMaterialOverlayState.Task(recipe.stableIdentity() + "#input" + groupedInput.firstIndex(),
+                    leaf, groupedInput.materialKey(), amountPerCraft, 1L, groupedInput.input().consumed(), List.of()));
+        }
+        path.remove(node);
+        return new FloatingMaterialOverlayState.Task(recipe.stableIdentity(), output, outputKey, requiredOutput,
+                recipe.primaryOutputAmount(), true, inputs);
+    }
+
+    private record FloatingInputKey(MaterialKey materialKey, @Nullable RecipeTreeNodeViewModel child, boolean consumed) {
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof FloatingInputKey key
+                    && materialKey.equals(key.materialKey)
+                    && child == key.child
+                    && consumed == key.consumed;
+        }
+
+        @Override
+        public int hashCode() {
+            int hash = 31 * materialKey.hashCode() + System.identityHashCode(child);
+            return 31 * hash + Boolean.hashCode(consumed);
+        }
+    }
+
+    private static final class FloatingInputAccumulator {
+        private final int firstIndex;
+        private final RecipeTreeInputViewModel input;
+        private final @Nullable RecipeTreeNodeViewModel child;
+        private final @Nullable ITypedIngredient<?> ingredient;
+        private final ItemStack stack;
+        private final MaterialKey materialKey;
+        private long amount;
+
+        private FloatingInputAccumulator(int firstIndex, RecipeTreeInputViewModel input,
+                @Nullable RecipeTreeNodeViewModel child, @Nullable ITypedIngredient<?> ingredient,
+                ItemStack stack, MaterialKey materialKey) {
+            this.firstIndex = firstIndex;
+            this.input = input;
+            this.child = child;
+            this.ingredient = ingredient;
+            this.stack = stack;
+            this.materialKey = materialKey;
+        }
+
+        private void add(long added) {
+            amount = saturatedLongAdd(amount, added);
+        }
+
+        private int firstIndex() { return firstIndex; }
+        private RecipeTreeInputViewModel input() { return input; }
+        private @Nullable RecipeTreeNodeViewModel child() { return child; }
+        private @Nullable ITypedIngredient<?> ingredient() { return ingredient; }
+        private ItemStack stack() { return stack; }
+        private MaterialKey materialKey() { return materialKey; }
+        private long amount() { return amount; }
+    }
+
+    private FloatingMaterialOverlayState.Entry floatingEntry(ItemStack stack, @Nullable ITypedIngredient<?> ingredient,
+            long amount, @Nullable IDrawable machineIcon, @Nullable Component machineName, String machineKey) {
+        int count = (int) Math.min(Integer.MAX_VALUE, Math.max(1L, amount));
+        return new FloatingMaterialOverlayState.Entry(stack, ingredient, count, "", machineIcon, machineName, machineKey);
+    }
+
+    private MaterialKey materialKeyOf(@Nullable ITypedIngredient<?> ingredient, ItemStack stack) {
+        IIngredientManager manager = getIngredientManager();
+        ITypedIngredient<?> resolved = ingredient;
+        if (resolved == null && manager != null && stack != null && !stack.isEmpty()) {
+            resolved = manager.createTypedIngredient(stack.copyWithCount(1), true).orElse(null);
+        }
+        return manager != null && resolved != null
+                ? com.lhy.jeict.util.IngredientIdentityUtil.keyOf(manager, resolved)
+                : MaterialKey.of(com.lhy.jeict.util.IngredientIdentityUtil.fallbackSignature(ingredient, stack));
+    }
+
+    private static long saturatedLongAdd(long left, long right) {
+        if (right > 0L && left > Long.MAX_VALUE - right) return Long.MAX_VALUE;
+        return left + right;
+    }
+
+    private static long saturatedLongMultiply(long left, long right) {
+        if (left <= 0L || right <= 0L) return 0L;
+        return left > Long.MAX_VALUE / right ? Long.MAX_VALUE : left * right;
+    }
+
+    private static long ceilDivLong(long numerator, long denominator) {
+        if (numerator <= 0L) return 0L;
+        long safeDenominator = Math.max(1L, denominator);
+        return 1L + (numerator - 1L) / safeDenominator;
     }
 
     private @Nullable UnresolvedInputSlot firstUnresolvedSlot(RequestedIngredient material) {
@@ -6683,6 +6962,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         for (RecipeTreeRecipeViewModel recipe : context.collectSelectedRecipes()) {
             if (recipe.primaryOutputIngredient() == null) continue;
             PatternEncodingDraft draft = patternDraftFor(recipe);
+            syncDraftAlternativesFromTree(draft, recipe);
             PatternEncodingRequest request = new PatternEncodingRequest(recipe, draft);
             if (!backend.hasExactPatternDraft(request)) unique.putIfAbsent(draft.fingerprint(), request);
         }
@@ -7018,17 +7298,49 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     private static final class ItemTopMaterialAccumulator {
+        private final String entryKey;
         private final List<ItemStack> alternatives;
         private final List<UnresolvedInputSlot> slots = new ArrayList<>();
         private int totalAmount;
 
-        private ItemTopMaterialAccumulator(RecipeTreeInputViewModel input) {
+        private ItemTopMaterialAccumulator(RecipeTreeInputViewModel input, String entryKey) {
+            this.entryKey = entryKey;
             alternatives = List.copyOf(input.orderedAlternativesView());
+        }
+
+        private ItemTopMaterialAccumulator(String entryKey, List<ItemStack> alternatives,
+                List<UnresolvedInputSlot> slots, int totalAmount) {
+            this.entryKey = entryKey;
+            this.alternatives = List.copyOf(alternatives);
+            this.slots.addAll(slots);
+            this.totalAmount = totalAmount;
         }
 
         private void add(RecipeTreeInputViewModel input, RecipeTreeNodeViewModel parent, int amount) {
             totalAmount = safeAdd(totalAmount, Math.max(1, amount));
             slots.add(new UnresolvedInputSlot(input, parent));
+        }
+
+        private static ItemTopMaterialAccumulator merge(List<ItemTopMaterialAccumulator> group) {
+            if (group.size() == 1) {
+                return group.get(0);
+            }
+            ItemTopMaterialAccumulator first = group.get(0);
+            List<ItemStack> mergedAlternatives = new ArrayList<>();
+            for (ItemTopMaterialAccumulator member : group) {
+                for (ItemStack alternative : member.alternatives) {
+                    if (mergedAlternatives.stream().noneMatch(existing -> ItemStack.isSameItemSameComponents(existing, alternative))) {
+                        mergedAlternatives.add(alternative.copy());
+                    }
+                }
+            }
+            List<UnresolvedInputSlot> mergedSlots = new ArrayList<>();
+            int mergedAmount = 0;
+            for (ItemTopMaterialAccumulator member : group) {
+                mergedSlots.addAll(member.slots);
+                mergedAmount = safeAdd(mergedAmount, member.totalAmount);
+            }
+            return new ItemTopMaterialAccumulator(first.entryKey, mergedAlternatives, mergedSlots, mergedAmount);
         }
 
         private RequestedIngredient toRequestedIngredient() {
@@ -7038,20 +7350,44 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         private List<UnresolvedInputSlot> slots() {
             return List.copyOf(slots);
         }
+
+        private String entryKey() {
+            return entryKey;
+        }
+
+        private RecipeTreeInputViewModel representative() {
+            return slots.getFirst().input();
+        }
     }
 
     private final class GenericTopMaterialAccumulator {
+        private final String entryKey;
         private final List<RecipeTreeInputViewModel> members = new ArrayList<>();
         private final List<RecipeTreeNodeViewModel> parents = new ArrayList<>();
+        private final List<Integer> amounts = new ArrayList<>();
         private int totalAmount;
 
-        private GenericTopMaterialAccumulator(RecipeTreeInputViewModel input, RecipeTreeNodeViewModel parent) {
+        private GenericTopMaterialAccumulator(RecipeTreeInputViewModel input, RecipeTreeNodeViewModel parent, String entryKey) {
+            this.entryKey = entryKey;
         }
 
         private void add(RecipeTreeInputViewModel input, RecipeTreeNodeViewModel parent, int amount) {
             members.add(input);
             parents.add(parent);
+            amounts.add(Math.max(1, amount));
             totalAmount = safeAdd(totalAmount, Math.max(1, amount));
+        }
+
+        private GenericTopMaterialAccumulator merge(List<GenericTopMaterialAccumulator> group) {
+            GenericTopMaterialAccumulator first = group.get(0);
+            GenericTopMaterialAccumulator merged = new GenericTopMaterialAccumulator(first.representative(),
+                    first.parents.getFirst(), first.entryKey);
+            for (GenericTopMaterialAccumulator member : group) {
+                for (int i = 0; i < member.members.size(); i++) {
+                    merged.add(member.members.get(i), member.parents.get(i), member.amounts.get(i));
+                }
+            }
+            return merged;
         }
 
         private MergedLeaf toLeaf() {
@@ -7066,6 +7402,14 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 slots.add(new UnresolvedInputSlot(members.get(i), parents.get(i)));
             }
             return List.copyOf(slots);
+        }
+
+        private String entryKey() {
+            return entryKey;
+        }
+
+        private RecipeTreeInputViewModel representative() {
+            return members.getFirst();
         }
     }
 

@@ -28,6 +28,7 @@ import net.minecraft.world.item.ItemStack;
 /** Versioned client-side view of the stock AE2 already synchronizes to an open ME terminal. */
 public final class Ae2ClientMenuInventoryProvider implements ClientMenuInventoryProvider {
     private static final long REFRESH_INTERVAL_TICKS = 5L;
+    private static final Ae2ClientMenuInventoryProvider INSTANCE = new Ae2ClientMenuInventoryProvider();
 
     private AbstractContainerMenu cachedMenu;
     private long nextRefreshTick;
@@ -38,7 +39,12 @@ public final class Ae2ClientMenuInventoryProvider implements ClientMenuInventory
     }
 
     public static void register() {
-        ClientMenuInventoryProviders.register(new Ae2ClientMenuInventoryProvider());
+        ClientMenuInventoryProviders.register(INSTANCE);
+    }
+
+    public static void invalidateSnapshot() {
+        INSTANCE.cachedMenu = null;
+        INSTANCE.nextRefreshTick = 0L;
     }
 
     @Override
