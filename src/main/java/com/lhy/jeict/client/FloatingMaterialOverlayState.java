@@ -1,14 +1,17 @@
 package com.lhy.jeict.client;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.jetbrains.annotations.Nullable;
 
 import com.lhy.jeict.config.RecipeTreeConfig;
 import com.lhy.jeict.jei.JeiCraftingTreePlugin;
+import com.lhy.jeict.network.CreativeRefillRequestPayload;
 import com.lhy.jeict.recipe_tree.RecipeTreeRootContext;
 import com.lhy.jeict.planning.MaterialKey;
 import com.lhy.jeict.util.GenericIngredientUtil;
@@ -16,6 +19,7 @@ import com.lhy.jeict.util.IngredientIdentityUtil;
 import com.mojang.blaze3d.platform.InputConstants;
 
 import mezz.jei.api.gui.drawable.IDrawable;
+import mezz.jei.api.constants.VanillaTypes;
 import mezz.jei.api.ingredients.ITypedIngredient;
 import mezz.jei.api.ingredients.IIngredientRenderer;
 import mezz.jei.api.neoforge.NeoForgeTypes;
@@ -37,6 +41,7 @@ import net.minecraft.world.item.TooltipFlag;
 import net.neoforged.neoforge.client.event.InputEvent;
 import net.neoforged.neoforge.client.event.ScreenEvent;
 import net.neoforged.neoforge.fluids.FluidStack;
+import net.neoforged.neoforge.network.PacketDistributor;
 
 public final class FloatingMaterialOverlayState {
     private static final int BASE_WIDTH = 168;
@@ -61,8 +66,13 @@ public final class FloatingMaterialOverlayState {
     private static final float TOOLTIP_Z = OVERLAY_Z + 400.0F;
     private static final int AUTO_CRAFT_WIDTH = 46;
     private static final int AUTO_CRAFT_LEFT = BASE_WIDTH - CONTENT_PADDING - AUTO_CRAFT_WIDTH;
+    private static final int CREATIVE_REFILL_WIDTH = 46;
+    private static final int CREATIVE_REFILL_LEFT = AUTO_CRAFT_LEFT - 4 - CREATIVE_REFILL_WIDTH;
+    private static final int MAX_CREATIVE_REFILL_SLOTS = 64;
     private static final Component AUTO_CRAFT_LABEL =
             Component.translatable("gui.jeict.recipe_tree.floating_auto_craft_label");
+    private static final Component CREATIVE_REFILL_LABEL =
+            Component.translatable("gui.jeict.recipe_tree.floating_creative_refill_label");
     private static final ResourceLocation MICRO_AMOUNT_FONT = ResourceLocation.withDefaultNamespace("uniform");
 
     private static Snapshot snapshot;
@@ -118,7 +128,7 @@ public final class FloatingMaterialOverlayState {
             clear();
             return;
         }
-        if (snapshot == null || snapshot.entries().isEmpty()) {
+        if (snapshot == null || (snapshot.entries().isEmpty() && snapshot.tasks().isEmpty())) {
             return;
         }
         Minecraft minecraft = Minecraft.getInstance();
@@ -228,6 +238,19 @@ public final class FloatingMaterialOverlayState {
         }
 
         int craftY = autoCraftButtonTop(height);
+        boolean creativeRefillVisible = canCreativeRefill(displayGroups);
+        boolean creativeRefillHovered = creativeRefillVisible
+                && localMouseX >= CREATIVE_REFILL_LEFT
+                && localMouseX < CREATIVE_REFILL_LEFT + CREATIVE_REFILL_WIDTH
+                && localMouseY >= craftY && localMouseY < craftY + CONTROL_SIZE;
+        if (creativeRefillVisible) {
+            RecipeTreeTheme.drawButton(graphics, CREATIVE_REFILL_LEFT, craftY, CREATIVE_REFILL_WIDTH, CONTROL_SIZE,
+                    creativeRefillHovered, true);
+            int refillTextY = craftY + Math.max(0, (CONTROL_SIZE - font.lineHeight) / 2);
+            graphics.drawCenteredString(font, CREATIVE_REFILL_LABEL,
+                    CREATIVE_REFILL_LEFT + CREATIVE_REFILL_WIDTH / 2, refillTextY,
+                    creativeRefillHovered ? theme.controlHoverText() : theme.controlText());
+        }
         boolean craftHovered = localMouseX >= AUTO_CRAFT_LEFT && localMouseX < AUTO_CRAFT_LEFT + AUTO_CRAFT_WIDTH
                 && localMouseY >= craftY && localMouseY < craftY + CONTROL_SIZE;
         boolean autoCraftRunning = RecipeTreeAutoCraftSession.status().running();
@@ -254,14 +277,14 @@ public final class FloatingMaterialOverlayState {
             } else {
                 List<Component> tooltipLines = ingredientTooltipLines(hoveredEntry.source());
                 tooltipLines.add(Component.translatable("gui.jeict.recipe_tree.floating_available_amount",
-                        formatEntryAmount(hoveredEntry.source(), hoveredEntry.available()))
+                        formatDetailedAmount(hoveredEntry.source(), hoveredEntry.available()))
                         .withStyle(s -> s.withColor(0xFFAAAAAA)));
                 tooltipLines.add(Component.translatable("gui.jeict.recipe_tree.floating_required_amount",
-                        formatEntryAmount(hoveredEntry.source(), hoveredEntry.source().count()))
+                        formatDetailedAmount(hoveredEntry.source(), hoveredEntry.source().count()))
                         .withStyle(s -> s.withColor(0xFFAAAAAA)));
                 int missingAmountColor = hoveredEntry.remaining() > 0 ? 0xFFFF5555 : 0xFF55FF55;
                 tooltipLines.add(Component.translatable("gui.jeict.recipe_tree.floating_missing_amount",
-                        formatEntryAmount(hoveredEntry.source(), hoveredEntry.remaining()))
+                        formatDetailedAmount(hoveredEntry.source(), hoveredEntry.remaining()))
                         .withStyle(s -> s.withColor(missingAmountColor)));
                 tooltipLines.add(Component.translatable("gui.jeict.recipe_tree.floating_left_click_hint")
                         .withStyle(s -> s.withColor(0xFFAAAAAA).withItalic(true)));
@@ -406,6 +429,12 @@ public final class FloatingMaterialOverlayState {
             return true;
         }
 
+        if (button == 0 && isOverCreativeRefillButton(localX, localY)) {
+            runCreativeRefill();
+            cancel(event);
+            return true;
+        }
+
         if (localY >= HEADER_HEIGHT && localY < lastHeight - FOOTER_HEIGHT) {
             if (handleContentClick(localX, localY, button)) {
                 cancel(event);
@@ -452,6 +481,13 @@ public final class FloatingMaterialOverlayState {
                 && localY >= craftY && localY < craftY + CONTROL_SIZE;
     }
 
+    private static boolean isOverCreativeRefillButton(double localX, double localY) {
+        int refillY = autoCraftButtonTop(lastHeight);
+        return canCreativeRefill(displayGroups())
+                && localX >= CREATIVE_REFILL_LEFT && localX < CREATIVE_REFILL_LEFT + CREATIVE_REFILL_WIDTH
+                && localY >= refillY && localY < refillY + CONTROL_SIZE;
+    }
+
     private static void runAutoCraft() {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.player == null) {
@@ -465,6 +501,63 @@ public final class FloatingMaterialOverlayState {
                         ? Component.translatable("message.jeict.auto_craft_cancelled")
                         : Component.translatable("message.jeict.auto_craft_unavailable");
         minecraft.player.displayClientMessage(message, true);
+    }
+
+    private static void runCreativeRefill() {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.player == null || !canCreativeRefill(displayGroups())) return;
+        Map<Integer, ItemStack> plannedSlots = new LinkedHashMap<>();
+        int changedSlots = 0;
+        for (DisplayGroup group : displayGroups()) {
+            for (DisplayEntry entry : group.entries()) {
+                if (entry.remaining() <= 0L) continue;
+                ItemStack template = itemStack(entry.source());
+                if (template.isEmpty()) continue;
+                long remaining = entry.remaining();
+                for (var slot : minecraft.player.containerMenu.slots) {
+                    if (changedSlots >= MAX_CREATIVE_REFILL_SLOTS || remaining <= 0L) break;
+                    if (slot.container == minecraft.player.getInventory() || !slot.mayPlace(template)) continue;
+                    ItemStack current = plannedSlots.getOrDefault(slot.index, slot.getItem()).copy();
+                    if (!current.isEmpty() && !ItemStack.isSameItemSameComponents(current, template)) continue;
+                    int max = Math.min(slot.getMaxStackSize(), template.getMaxStackSize());
+                    int space = current.isEmpty() ? max : max - current.getCount();
+                    if (space <= 0) continue;
+                    int added = (int) Math.min(remaining, space);
+                    ItemStack filled = template.copyWithCount((current.isEmpty() ? 0 : current.getCount()) + added);
+                    plannedSlots.put(slot.index, filled.copy());
+                    remaining -= added;
+                    changedSlots++;
+                }
+                if (changedSlots >= MAX_CREATIVE_REFILL_SLOTS) break;
+            }
+            if (changedSlots >= MAX_CREATIVE_REFILL_SLOTS) break;
+        }
+        plannedSlots.forEach((slot, stack) -> PacketDistributor.sendToServer(new CreativeRefillRequestPayload(
+                minecraft.player.containerMenu.containerId, slot, stack)));
+        if (changedSlots > 0) ClientInventorySnapshotCache.invalidate();
+        minecraft.player.displayClientMessage(Component.translatable(changedSlots > 0
+                ? "message.jeict.creative_refill_sent"
+                : "message.jeict.creative_refill_no_space"), true);
+    }
+
+    private static boolean canCreativeRefill(List<DisplayGroup> groups) {
+        Minecraft minecraft = Minecraft.getInstance();
+        var connection = minecraft.getConnection();
+        if (minecraft.player == null || !minecraft.player.getAbilities().instabuild
+                || connection == null || !connection.hasChannel(CreativeRefillRequestPayload.TYPE)) return false;
+        for (DisplayGroup group : groups) {
+            for (DisplayEntry entry : group.entries()) {
+                if (entry.remaining() > 0L && !itemStack(entry.source()).isEmpty()) return true;
+            }
+        }
+        return false;
+    }
+
+    private static ItemStack itemStack(Entry entry) {
+        if (!entry.stack().isEmpty()) return entry.stack().copyWithCount(1);
+        return entry.ingredient() == null ? ItemStack.EMPTY
+                : entry.ingredient().getIngredient(VanillaTypes.ITEM_STACK)
+                        .map(stack -> stack.copyWithCount(1)).orElse(ItemStack.EMPTY);
     }
 
     private static boolean handleContentClick(double localX, double localY, int button) {
@@ -631,10 +724,10 @@ public final class FloatingMaterialOverlayState {
         }
         var inventory = ClientInventorySnapshotCache.get();
         Map<String, MutableDisplayGroup> grouped = new LinkedHashMap<>();
-        for (Entry entry : snapshot.entries()) {
+        for (Entry entry : projectedEntries(inventory)) {
             long available = availableAmount(inventory, entry);
             long remaining = Math.max(0L, (long) entry.count() - available);
-            if (!entry.stack().isEmpty() && !showAll && remaining <= 0L) {
+            if (!showAll && remaining <= 0L) {
                 continue;
             }
             Component badgeText = Component.literal(formatEntryAmount(entry, remaining).replace(" ", ""))
@@ -651,6 +744,91 @@ public final class FloatingMaterialOverlayState {
         cachedShowAll = showAll;
         displayEntriesDirty = false;
         return cachedDisplayGroups;
+    }
+
+    private static List<Entry> projectedEntries(com.lhy.jeict.planning.InventorySnapshot inventory) {
+        if (snapshot.tasks().isEmpty()) {
+            return snapshot.entries();
+        }
+        Map<MaterialKey, Long> available = new LinkedHashMap<>(inventory.amounts());
+        List<Entry> projected = new ArrayList<>();
+        Set<Task> path = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Task task : snapshot.tasks()) {
+            collectTaskFrontier(task, task.requiredAmount(), available, projected, path);
+        }
+        return mergeProjectedEntries(projected);
+    }
+
+    private static boolean collectTaskFrontier(Task task, long requiredAmount, Map<MaterialKey, Long> available,
+            List<Entry> projected, Set<Task> path) {
+        long owned = Math.max(0L, available.getOrDefault(task.outputKey(), 0L));
+        long used = Math.min(owned, requiredAmount);
+        if (used > 0L) {
+            available.put(task.outputKey(), owned - used);
+        }
+        long missing = requiredAmount - used;
+        if (missing <= 0L) {
+            if (showAll) projected.add(task.output().withCount(requiredAmount));
+            return true;
+        }
+        if (task.inputs().isEmpty() || !path.add(task)) {
+            projected.add(task.output().withCount(requiredAmount));
+            return false;
+        }
+
+        long crafts = ceilDiv(missing, task.outputPerCraft());
+        List<Entry> childFrontier = new ArrayList<>();
+        boolean inputsReady = true;
+        for (Task input : task.inputs()) {
+            long required = input.consumed()
+                    ? saturatedMultiply(input.requiredAmount(), crafts)
+                    : input.requiredAmount();
+            inputsReady &= collectTaskFrontier(input, required, available, childFrontier, path);
+        }
+        path.remove(task);
+        if (inputsReady) {
+            projected.add(task.output().withCount(requiredAmount));
+        } else {
+            projected.addAll(childFrontier);
+        }
+        return false;
+    }
+
+    private static List<Entry> mergeProjectedEntries(List<Entry> entries) {
+        IJeiRuntime runtime = JeiCraftingTreePlugin.getJeiRuntime();
+        if (runtime == null) return List.copyOf(entries);
+        IIngredientManager manager = runtime.getIngredientManager();
+        Map<String, Entry> merged = new LinkedHashMap<>();
+        for (Entry entry : entries) {
+            ITypedIngredient<?> ingredient = typedIngredient(manager, entry);
+            String material = ingredient == null
+                    ? IngredientIdentityUtil.fallbackSignature(entry.ingredient(), entry.stack())
+                    : IngredientIdentityUtil.keyOf(manager, ingredient).encoded();
+            String key = entry.machineKey() + '\u0000' + material;
+            merged.merge(key, entry, (left, right) -> left.withCount(saturatedAdd(left.count(), right.count())));
+        }
+        return List.copyOf(merged.values());
+    }
+
+    private static @Nullable ITypedIngredient<?> typedIngredient(IIngredientManager manager, Entry entry) {
+        if (entry.ingredient() != null) return entry.ingredient();
+        if (entry.stack().isEmpty()) return null;
+        return manager.createTypedIngredient(entry.stack().copyWithCount(1), true).orElse(null);
+    }
+
+    private static long ceilDiv(long numerator, long denominator) {
+        if (numerator <= 0L) return 0L;
+        long safeDenominator = Math.max(1L, denominator);
+        return 1L + (numerator - 1L) / safeDenominator;
+    }
+
+    private static long saturatedMultiply(long left, long right) {
+        if (left <= 0L || right <= 0L) return 0L;
+        return left > Long.MAX_VALUE / right ? Long.MAX_VALUE : left * right;
+    }
+
+    private static int saturatedAdd(int left, int right) {
+        return (int) Math.min(Integer.MAX_VALUE, (long) left + right);
     }
 
     private static long availableAmount(com.lhy.jeict.planning.InventorySnapshot inventory, Entry entry) {
@@ -682,6 +860,9 @@ public final class FloatingMaterialOverlayState {
     private static @Nullable Component controlTooltipAt(double localMouseX, double localMouseY) {
         if (isOverAutoCraftButton(localMouseX, localMouseY)) {
             return Component.translatable("gui.jeict.recipe_tree.floating_auto_craft_tooltip");
+        }
+        if (isOverCreativeRefillButton(localMouseX, localMouseY)) {
+            return Component.translatable("gui.jeict.recipe_tree.floating_creative_refill_tooltip");
         }
         if (localMouseY < 5 || localMouseY > 17) {
             return null;
@@ -743,6 +924,12 @@ public final class FloatingMaterialOverlayState {
         graphics.drawString(font, label, 1, 1, entry.remaining() <= 0 ? theme.enough() : theme.missing(), false);
         graphics.drawString(font, label, 0, 0, theme.slotOverlayText(), false);
         graphics.pose().popPose();
+    }
+
+    private static String formatDetailedAmount(Entry entry, long amount) {
+        String compact = formatEntryAmount(entry, amount);
+        if (usesMilliBucketUnits(entry) || amount < 1_000L) return compact;
+        return compact + " (" + String.format(java.util.Locale.ROOT, "%,d", Math.max(0L, amount)) + ")";
     }
 
     private static String formatEntryAmount(Entry entry, long amount) {
@@ -827,9 +1014,24 @@ public final class FloatingMaterialOverlayState {
         return new ArrayList<>(renderer.getTooltip(typed.getIngredient(), TooltipFlag.Default.NORMAL));
     }
 
-    public record Snapshot(List<Entry> entries, @Nullable RecipeTreeRootContext context) {
+    public record Snapshot(List<Entry> entries, List<Task> tasks, @Nullable RecipeTreeRootContext context) {
+        public Snapshot(List<Entry> entries, @Nullable RecipeTreeRootContext context) {
+            this(entries, List.of(), context);
+        }
+
         public Snapshot {
             entries = List.copyOf(entries);
+            tasks = tasks == null ? List.of() : List.copyOf(tasks);
+        }
+    }
+
+    public record Task(String identity, Entry output, MaterialKey outputKey, long requiredAmount,
+            long outputPerCraft, boolean consumed, List<Task> inputs) {
+        public Task {
+            identity = identity == null ? "" : identity;
+            requiredAmount = Math.max(1L, requiredAmount);
+            outputPerCraft = Math.max(1L, outputPerCraft);
+            inputs = inputs == null ? List.of() : List.copyOf(inputs);
         }
     }
 
@@ -870,6 +1072,11 @@ public final class FloatingMaterialOverlayState {
             amountLabel = amountLabel == null ? "" : amountLabel;
             machineKey = machineKey == null ? "" : machineKey;
             renderFluid = renderFluid == null ? null : renderFluid.copy();
+        }
+
+        private Entry withCount(long nextCount) {
+            int safeCount = (int) Math.min(Integer.MAX_VALUE, Math.max(1L, nextCount));
+            return new Entry(stack, ingredient, safeCount, amountLabel, machineIcon, machineName, machineKey, renderFluid);
         }
     }
 }

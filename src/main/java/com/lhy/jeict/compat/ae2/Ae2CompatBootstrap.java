@@ -10,6 +10,7 @@ public final class Ae2CompatBootstrap {
     public static void registerIfLoaded() {
         if (ModList.get().isLoaded("ae2")) {
             Ae2ClientMenuInventoryProvider.register();
+            com.lhy.jeict.client.CraftingResultInteractions.register(new Ae2CraftingResultInteraction());
         }
     }
 }

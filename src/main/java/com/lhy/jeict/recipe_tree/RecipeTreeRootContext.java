@@ -176,6 +176,7 @@ public final class RecipeTreeRootContext {
         if (!RecipeTreeConfig.REMEMBER_SELECTIONS.get()) return;
         String scoped = com.lhy.jeict.client.RecipeTreeMemoryKey.of(parent, inputIndex, input, legacySignature);
         RecipeTreeClientMemory.rememberSelection(scoped, recipe);
+        // 鏉愭枡绾у厹搴曪細浣嶇疆閿彧鍦ㄨ鐖堕厤鏂?妲戒綅鍛戒腑锛屽悓涓€鏉愭枡鍑虹幇鍦ㄦ爲鐨勫叾浠栦綅缃椂璇诲彇浼氳惤绌恒€?        // 璇诲彇渚э紙getRememberedSelection 鐨?legacy 闄嶇骇锛変細鍏堟煡浣嶇疆閿€佹湭鍛戒腑鍐嶆寜鏉愭枡绛惧悕鍏滃簳锛?        // 鍥犳杩欓噷濮嬬粓鎶婃渶鏂伴€夋嫨鍚屾涓€浠藉埌鏉愭枡绾ч敭锛岃鏂板睍寮€鐨勫垎鏀篃鑳借嚜鍔ㄥ睍寮€銆?        RecipeTreeClientMemory.rememberSelection(legacySignature, recipe);
     }
 
     public @Nullable RecipeTreeRecipeViewModel getRememberedSelection(RecipeTreeNodeViewModel parent, int inputIndex,

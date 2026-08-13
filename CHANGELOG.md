@@ -1,87 +1,128 @@
 # Changelog
 
-本文件记录 JEI Crafting Tree 面向用户与集成开发者的重要变更。每个发布版本只保留一个版本标题，并按“新增、优化、修复、移除、开发者”分类维护，不记录开发过程流水账。
+[v0.0.3](#v003) | [v0.0.2](#v002) | [v0.0.1](#v001--2026-07-23)
+
+## v0.0.3
+
+### English
+
+#### Added
+
+1. Added optional server-side batch crafting channels for AE2 and Sophisticated crafting interfaces.
+2. Added Creative-mode material refill to the floating material panel. When JEICT is installed on both sides, missing item materials can be inserted into compatible slots of the open menu, with server validation and a per-click limit of 64 changed slots.
+
+#### Optimized
+
+1. Improved large-quantity auto-crafting planning.
+2. Improved floating material projection so intermediate products are expanded only as needed by the current inventory, reducing unnecessary material entries and recalculation work.
+
+#### Fixed
+
+1. Fixed auto-crafting from the floating material panel failing in Sophisticated Storage, Sophisticated Backpacks, and ME terminals.
+2. Fixed alternative-material changes not being synchronized into existing pattern drafts before encoding or uploading.
+3. Fixed the overview splitting the same displayed material into separate aggregates when it appeared with different candidate sets or as both a recipe output and a leaf input.
+4. Fixed remembered child-recipe selections not being applied when the same material appeared elsewhere in the tree; selections now fall back by material signature.
+5. Fixed pattern encoding/upload under AE2 Utility still using the previously selected material after switching alternatives in the tree.
+6. Fixed AE2 Utility integration hiding the JEI Crafting Tree button even when the utility's own encoding arrow was unavailable.
+
+### 涓枃
+
+#### 鏂板
+
+1. 鏂板 AE2 涓?Sophisticated 鍚堟垚鐣岄潰鐨勫彲閫夋湇鍔＄鎵归噺鍚堟垚閫氶亾銆?2. 鏂板鎮诞鏉愭枡闈㈡澘鐨勫垱閫犳ā寮忚ˉ鏂欏姛鑳姐€傚鎴风鍜屾湇鍔＄閮藉畨瑁?JEICT 鏃讹紝鍙寜缂哄け鏁伴噺鍚戝綋鍓嶈彍鍗曠殑鍏煎妲戒綅琛ュ厖鐗╁搧锛涙湇鍔＄浼氶獙璇佽姹傦紝姣忔鐐瑰嚮鏈€澶氫慨鏀?64 涓Ы浣嶃€?
+#### 浼樺寲
+
+1. 浼樺寲澶ф暟閲忚嚜鍔ㄥ悎鎴愯鍒掋€?2. 浼樺寲鎮诞鏉愭枡鎶曞奖锛氭牴鎹綋鍓嶅簱瀛樻寜闇€灞曞紑涓棿浜х墿锛屽噺灏戜笉蹇呰鐨勬潗鏂欐潯鐩拰閲嶅璁＄畻銆?
+#### 淇
+
+1. 淇鏉愭枡娓呭崟鎮诞鐣岄潰鑷姩鍚堟垚鍦ㄧ簿濡欏瓨鍌ㄣ€佺簿濡欒儗鍖呭拰 ME 缁堢鏃犳硶姝ｅ父鐢熸晥鐨勯棶棰樸€?2. 淇鍒囨崲鏇夸唬鏉愭枡鍚庯紝缂栫爜鎴栦笂浼犲墠鐜版湁鏍锋澘鑽夌娌℃湁鍚屾鏂版潗鏂欑殑闂銆?3. 淇鎬昏涓悓涓€鏉愭枡鍥犲€欓€夐泦鍚堜笉鍚屻€佹垨鍚屾椂浣滀负閰嶆柟杈撳嚭涓庡彾瀛愯緭鍏ヨ€岃鎷嗗垎鎴愬鏉℃眹鎬荤殑闂銆?4. 淇宸茶蹇嗙殑涓嬬骇閰嶆柟閫夋嫨鍦ㄦ爲鐨勫叾浠栦綅缃亣鍒扮浉鍚屾潗鏂欐椂涓嶇敓鏁堢殑闂锛涢€夋嫨鐜板湪鎸夋潗鏂欑鍚嶅厹搴曘€?5. 淇 AE2 Utility 涓嬪垏鎹㈡浛浠ｆ潗鏂欏悗锛岀紪鐮?涓婁紶浠嶄娇鐢ㄥ垏鎹㈠墠鏉愭枡鐨勯棶棰樸€?6. 淇 AE2 Utility 鑷韩缂栫爜绠ご涓嶅彲鐢ㄦ椂锛孞EI Crafting Tree 鎸夐挳浠嶈閿欒闅愯棌鐨勯棶棰樸€?
 
 ## v0.0.2
 
-### 新增 Added
+### English
 
-- 新增空间化多配方树工作区，多棵完整配方树可在同一个可缩放、可拖动的画布中同时显示，并可直接操作任意树的节点、分支与样板，无需先切换当前树。
-- 新增 JEI 书签区域左下角的配方树快捷入口；已有工作区时返回上次配方树，没有工作区时引导到 JEI 创建第一棵树。
-- 新增悬浮材料面板的连续自动合成：通过 JEI transfer 填充当前已打开的兼容菜单，再按原版容器协议取出产物；支持普通容器、AE2 终端和 Sophisticated 合成界面。
-- 新增当前打开菜单的库存统计，覆盖普通容器、AE2 ME 客户端库存视图和 Sophisticated Storage/Backpacks。
-- 新增稳定第三方 API：具名可注销后端/库存/菜单注册、库存权威分组、自动合成状态与客户端事件订阅，并提供完整中英文集成文档。
+#### Added
 
-### 优化 Optimized
+1. Added a spatial multi-tree workspace: complete recipe trees can be shown on one zoomable, pannable canvas and edited directly without switching the active tree first.
+2. Added a Crafting Tree shortcut at the lower-left of the JEI bookmark area. It returns to the previous workspace, or guides the player to create the first tree when no workspace exists.
+3. Added continuous auto-crafting from the floating material panel. It transfers ingredients through JEI into the currently open compatible menu, then takes results using the vanilla container protocol. It supports ordinary containers, AE2 terminals, and Sophisticated crafting interfaces.
+4. Added stock accounting for the currently open menu, including ordinary containers, the AE2 ME client-side inventory view, and Sophisticated Storage/Backpacks.
+5. Added a stable third-party API with named removable backend, inventory, and menu registrations; inventory authority groups; auto-crafting status; client events; and complete bilingual integration documentation.
 
-- 每棵配方树使用独立根上下文与视图控制器，分别保存总材料、剩余材料、项目、样板草稿、编辑历史和规划结果，避免不同树之间相互抵扣或污染状态。
-- 优化“添加更多配方”入口布局，使文字远离配方树最外侧节点，并移除按钮式底色以降低视觉遮挡。
-- 优化多树标题定位，将当前配方名称右对齐到对应根节点左侧，并保留固定间距避免文字覆盖节点。
-- 优化多树操作作用域，“合并”仅切换当前聚焦树，“适应”仅缩放并居中当前聚焦树，不再重置整个工作区。
-- 优化树间布局边界，将总材料、剩余材料和固定按钮区域纳入树尺寸计算，避免相邻配方树的材料区域互相覆盖。
+#### Optimized
 
-### 修复 Fixed
+1. Each recipe tree now has an independent root context and view controller, including separate required materials, surplus, projects, pattern drafts, history, and planning results, preventing cross-tree state contamination.
+2. Improved the placement of the 鈥渁dd more recipes鈥?entry, multi-tree titles, tree boundaries, and focused-tree controls to reduce overlap and preserve the scope of merge and fit actions.
+3. Aligned Sophisticated Storage, Sophisticated Core, and Sophisticated Backpacks runtime dependencies to a compatible version line.
 
-- 修复多配方树工作区中右键总材料定位仍修改嵌入树局部视口、导致主画布跳转到树间空白区域的问题；现在会按目标树的工作区偏移精确居中材料节点。
-- 修复批量编码和上传只处理当前单棵配方树的问题；操作现在会收集工作区所有配方树的最终样板草稿并统一去重、验证和提交。
-- 修复底部原料总量、余料和缺失材料统计始终读取第一棵树的问题；统计现在跟随当前聚焦的配方树。
-- 修复无输入配方展开后缺少折叠入口的问题，并避免“唯一配方”功能自动展开无法形成有效处理样板的零输入配方。
-- 修复在多配方树工作区中对第二棵及后续配方树执行“编写样板”或其他关闭界面的操作后，已终止的后台规划器仍被工作区继续调度并导致客户端崩溃的问题。
-- 修复多树渲染时主树可见范围被树位移反复覆盖，导致第二棵及后续配方树在放大后局部消失的问题。
-- 修复多树节点点击仍使用主画布坐标，导致任意树的左键选择配方、右键打开详情及折叠操作失效的问题。
-- 修复从 JEI 选取下级配方返回时聚焦树被界面重新初始化覆盖的问题，现在会回到发起选择的原配方树并保留画布位置。
-- 修复第二棵及后续配方树打开节点详情时只绘制内容、不绘制详情面板背景的问题。
+#### Fixed
 
-## [v0.0.1] - 2026-07-23
+1. Fixed workspace material navigation, batch pattern encoding/upload, focused-tree material statistics, zero-input recipe collapse behavior, background planner shutdown, zoomed secondary-tree visibility, and multi-tree pointer coordinates.
+2. Fixed returning from JEI recipe selection so focus and canvas position are restored to the initiating tree.
+3. Fixed missing node-inspector backgrounds for secondary trees.
 
-### 新增 Added
+### 涓枃
 
-- 新增从 JEI 配方布局打开的递归配方树，支持普通树形视图和同层材料合并视图。
-- 新增多项目全局生产规划，可统一计算原材料、库存抵扣、副产物、剩余产物、机器运行次数和有序执行清单。
-- 新增配方路线选择、替代材料策略、唯一配方自动展开、已有样板识别、循环配方检测与可视化标记。
-- 新增材料搜索、定位、跨层相同材料选择同步、配方选择与折叠状态记忆，以及 Just Enough Characters 拼音搜索兼容。
-- 新增悬浮总材料面板，可在 JEI 和其他界面中持续查看需求，并快速跳转配方或用途。
-- 新增可滚动的节点详情界面、JEI 原生配方布局预览，以及物品、流体、Mekanism 化学品和自定义 JEI ingredient 的统一展示。
-- 新增 AE2 可选集成：在 AE2 可用时显示原生风格的样板编辑区，支持合成、处理、切石机和锻造台样板草稿。
-- 新增处理样板输入输出编辑、数量调整、替代项切换、副产物移除、主输出调整、恢复与输入排序，并将草稿用于批量编码和上传前验证。
-- 新增项目、配方树和样板草稿的撤销/重做能力，以及修改节点的橙色边框和连接线提示。
+#### 鏂板
 
-### 优化 Optimized
+1. 鏂板绌洪棿鍖栧閰嶆柟鏍戝伐浣滃尯锛屽妫靛畬鏁撮厤鏂规爲鍙湪鍚屼竴涓彲缂╂斁銆佸彲鎷栧姩鐨勭敾甯冧腑鍚屾椂鏄剧ず锛屽苟鍙洿鎺ユ搷浣滀换鎰忔爲鐨勮妭鐐广€佸垎鏀笌鏍锋澘锛屾棤闇€鍏堝垏鎹㈠綋鍓嶆爲銆?2. 鏂板 JEI 涔︾鍖哄煙宸︿笅瑙掔殑閰嶆柟鏍戝揩鎹峰叆鍙ｏ紱宸叉湁宸ヤ綔鍖烘椂杩斿洖涓婃閰嶆柟鏍戯紝娌℃湁宸ヤ綔鍖烘椂寮曞鍒?JEI 鍒涘缓绗竴妫垫爲銆?3. 鏂板鎮诞鏉愭枡闈㈡澘鐨勮繛缁嚜鍔ㄥ悎鎴愶細閫氳繃 JEI transfer 濉厖褰撳墠宸叉墦寮€鐨勫吋瀹硅彍鍗曪紝鍐嶆寜鍘熺増瀹瑰櫒鍗忚鍙栧嚭浜х墿锛涙敮鎸佹櫘閫氬鍣ㄣ€丄E2 缁堢鍜?Sophisticated 鍚堟垚鐣岄潰銆?4. 鏂板褰撳墠鎵撳紑鑿滃崟鐨勫簱瀛樼粺璁★紝瑕嗙洊鏅€氬鍣ㄣ€丄E2 ME 瀹㈡埛绔簱瀛樿鍥惧拰 Sophisticated Storage/Backpacks銆?5. 鏂板绋冲畾绗笁鏂?API锛氬叿鍚嶅彲娉ㄩ攢鍚庣銆佸簱瀛樸€佽彍鍗曟敞鍐岋紝搴撳瓨鏉冨▉鍒嗙粍锛岃嚜鍔ㄥ悎鎴愮姸鎬佷笌瀹㈡埛绔簨浠惰闃咃紝浠ュ強瀹屾暣涓嫳鏂囬泦鎴愭枃妗ｃ€?
+#### 浼樺寲
 
-- 优化九重压缩圆石等超大重复配方树：共享 DAG 分支、饱和数量运算、布局结果复用和分帧自动展开，避免指数级内存增长与长时间卡顿。
-- 优化 JEI 配方查询和配方 ID 索引，增加缓存、结果上限和失效机制，降低唯一配方判断、路线比较和大规模展开的开销。
-- 优化后台规划调度：新请求取消旧任务，使用代次校验防止过期结果覆盖，并在树、配置或库存未变化时跳过重复计算。
-- 优化渲染路径：增加可见区域裁剪、行索引、节点与连线缓存、稳定布局和搜索结果过滤，减少缩放、拖动和大量节点显示时的延迟。
-- 优化跨层相同材料的配方选择、折叠和已修改状态同步，使重复节点保持一致。
-- 优化流体与化学品图标缩放和数量格式，按 AE2/Mekanism 习惯显示 mB、B 及小数数量，并避免数量被图标遮挡。
-- 优化样板编辑草稿的增量同步，仅刷新受影响节点、规划快照和显示缓存，避免额外整树扫描。
-- 优化 AE2 Utility 共存时的界面初始化与配方树生命周期，减少进入界面时树闪现后消失的问题。
+1. 姣忔５閰嶆柟鏍戜娇鐢ㄧ嫭绔嬫牴涓婁笅鏂囦笌瑙嗗浘鎺у埗鍣紝鍒嗗埆淇濆瓨鎬绘潗鏂欍€佸墿浣欐潗鏂欍€侀」鐩€佹牱鏉胯崏绋裤€佺紪杈戝巻鍙插拰瑙勫垝缁撴灉锛岄伩鍏嶄笉鍚屾爲涔嬮棿鐩镐簰鎶垫墸鎴栨薄鏌撶姸鎬併€?2. 浼樺寲鈥滄坊鍔犳洿澶氶厤鏂光€濆叆鍙ｃ€佸鏍戞爣棰樸€佹爲闂村竷灞€杈圭晫鍜岃仛鐒︽爲鎿嶄綔浣滅敤鍩燂紝鍑忓皯瑙嗚閬尅骞堕伩鍏嶅悎骞舵垨閫傚簲鎿嶄綔褰卞搷鏃犲叧鏍戙€?3. 瀵归綈 Sophisticated Storage銆丼ophisticated Core 鍜?Sophisticated Backpacks 鐨勮繍琛屾椂渚濊禆鐗堟湰绾裤€?
+#### 淇
 
-### 修复 Fixed
+1. 淇澶氶厤鏂规爲宸ヤ綔鍖轰腑鐨勬潗鏂欏畾浣嶃€佹壒閲忔牱鏉跨紪鐮?涓婁紶銆佽仛鐒︽爲鏉愭枡缁熻銆佹棤杈撳叆閰嶆柟鎶樺彔鍏ュ彛銆佸悗鍙拌鍒掑櫒缁堟銆佹斁澶у悗鐨勫悗缁爲鍙鎬у拰澶氭爲鐐瑰嚮鍧愭爣闂銆?2. 淇浠?JEI 閫夊彇涓嬬骇閰嶆柟杩斿洖鏃惰仛鐒︽爲鍜岀敾甯冧綅缃瑕嗙洊鐨勯棶棰樸€?3. 淇绗簩妫靛強鍚庣画閰嶆柟鏍戞墦寮€鑺傜偣璇︽儏鏃剁己灏戦潰鏉胯儗鏅殑闂銆?
+## v0.0.1 鈥?2026-07-23
 
-- 修复标题、搜索框和提示文字重叠，隐藏按钮缺少图标或 Tooltip，以及悬浮面板层级低于 JEI 导致界面过暗的问题。
-- 修复流体和化学品图标裁剪、不同流体高度不一致、非物品数量角标缺失或被遮挡的问题。
-- 修复成形合成配方空槽位置与 JEI 不一致的问题，保留原始槽位布局而不是压缩输入顺序。
-- 修复 Mekanism 化学品配方被错误附带储罐容器、数量被当作物品堆叠数，以及 Applied Mekanistics 编码语义不一致的问题。
-- 修复禁用“展开已有样板”后仍可继续选择下级配方的问题；禁用时会自动折叠已经展开的已有样板分支。
-- 修复样板编辑后配方树数量、草稿内容和橙色修改标记不同步，重新打开详情后修改状态丢失，以及编辑操作导致详情面板关闭的问题。
-- 修复处理样板被过度判定为无效的问题，并将编码或上传结果通知显示在配方树界面。
-- 修复恢复、输入顺序、物品替换和流体替换按钮的位置、文字对齐、颜色、音效与显示条件不一致的问题。
-- 修复节点左键/右键行为、总材料交互、循环标记、经典主题亮度和 JEI 预览对齐等界面问题。
+### English
 
-### 移除 Removed
+#### Added
 
-- 移除 JEI 配方布局预览外层重复边框，保留 JEI 自身布局边界。
-- 移除样板数量文字额外黑色底框，统一为 AE2 样板编码终端的文字大小与叠加样式。
-- 移除对服务端安装 JEI Crafting Tree 的强制要求；模组入口限定为客户端，专用服务端可不安装本模组。
-- 移除材料槽数量调整对 `Ctrl + 滚轮` 的依赖，改为指向槽位直接滚轮调整，避免与全局缩放冲突。
+1. Added a recursive crafting tree opened from JEI recipe layouts, with normal tree and layer-merged material views.
+2. Added multi-project global production planning for raw materials, inventory allocation, byproducts, surplus, machine runs, and ordered execution checklists.
+3. Added route selection, alternative-material strategies, unique-recipe expansion, existing-pattern detection, cycle detection, search, recipe/collapse memory, and Just Enough Characters pinyin-search compatibility.
+4. Added a floating material panel, a scrollable node inspector, JEI recipe previews, and unified rendering for item, fluid, Mekanism chemical, and custom JEI ingredients.
+5. Added optional AE2 pattern drafting for crafting, processing, stonecutting, and smithing patterns, including editable inputs, outputs, quantities, alternatives, byproducts, primary output, restore actions, input sorting, and pre-encode validation.
+6. Added undo/redo for projects, trees, and pattern drafts, with modified-node visual indicators.
 
-### 开发者 Developer
+#### Optimized
 
-- 新增 `CraftingTreeBackend` 扩展接口，用于精确样板判断、路线指纹、可复用输入、机器标识、编码、上传和替换控制。
-- 新增 `PatternEncodingDraft`、编码模式与槽位模型，使集成后端能够接收经过用户编辑的结构化样板草稿。
-- 新增 `InventorySource` API，支持带优先级、版本和不可变快照的外部库存来源。
-- 精确样板检测改为路线敏感的规范化配方指纹，避免只按输出物判断已有样板。
-- 客户端入口和 JEI/AE2 可选依赖声明已按客户端环境限制，服务端集成需求由各可选后端自行决定。
+1. Optimized very large repeated recipe trees with shared DAG branches, saturating quantity arithmetic, reused layout results, and incremental auto-expansion.
+2. Added JEI lookup and recipe-ID caches, background planning cancellation/generation checks, visible-region culling, row indexes, render caches, and incremental draft synchronization.
+3. Improved shared-material selection, collapse, and modified-state synchronization across tree depths; fluid and chemical rendering; and AE2 Utility coexistence.
 
+#### Fixed
+
+1. Fixed overlapping UI text and controls, floating-panel layering, fluid and chemical clipping/counts, shaped-recipe empty-slot layout, Mekanism chemical semantics, existing-pattern expansion blocking, pattern-draft synchronization, and node/material interactions.
+2. Fixed restore, input sorting, substitution-control placement, sound, and visibility behavior.
+
+#### Removed
+
+1. Removed the duplicate outer border around JEI recipe previews and the extra black background behind pattern quantities.
+2. Removed the requirement for JEI Crafting Tree on dedicated servers and changed material-slot quantity adjustment to direct scrolling instead of `Ctrl + scroll`.
+
+#### Developer
+
+1. Added `CraftingTreeBackend` for exact pattern checks, route fingerprints, reusable inputs, machine IDs, encoding, upload, and substitution controls.
+2. Added structured pattern-draft models and the versioned `InventorySource` API.
+3. Changed exact-pattern checks to route-sensitive normalized fingerprints and constrained client/JEI/AE2 optional dependencies to the client environment.
+
+### 涓枃
+
+#### 鏂板
+
+1. 鏂板浠?JEI 閰嶆柟甯冨眬鎵撳紑鐨勯€掑綊閰嶆柟鏍戯紝鏀寔鏅€氭爲褰㈣鍥惧拰鍚屽眰鏉愭枡鍚堝苟瑙嗗浘銆?2. 鏂板澶氶」鐩叏灞€鐢熶骇瑙勫垝锛屽彲缁熶竴璁＄畻鍘熸潗鏂欍€佸簱瀛樻姷鎵ｃ€佸壇浜х墿銆佸墿浣欎骇鐗┿€佹満鍣ㄨ繍琛屾鏁板拰鏈夊簭鎵ц娓呭崟銆?3. 鏂板閰嶆柟璺嚎閫夋嫨銆佹浛浠ｆ潗鏂欑瓥鐣ャ€佸敮涓€閰嶆柟鑷姩灞曞紑銆佸凡鏈夋牱鏉胯瘑鍒€佸惊鐜厤鏂规娴嬩笌鍙鍖栨爣璁帮紝浠ュ強鎼滅储銆侀厤鏂?鎶樺彔鐘舵€佽蹇嗗拰 Just Enough Characters 鎷奸煶鎼滅储鍏煎銆?4. 鏂板鎮诞鎬绘潗鏂欓潰鏉裤€佸彲婊氬姩鐨勮妭鐐硅鎯呯晫闈€丣EI 鍘熺敓閰嶆柟甯冨眬棰勮锛屼互鍙婄墿鍝併€佹祦浣撱€丮ekanism 鍖栧鍝佸拰鑷畾涔?JEI ingredient 鐨勭粺涓€灞曠ず銆?5. 鏂板 AE2 鍙€夐泦鎴愶細鏀寔鍚堟垚銆佸鐞嗐€佸垏鐭虫満鍜岄敾閫犲彴鏍锋澘鑽夌锛屼互鍙婅緭鍏ヨ緭鍑虹紪杈戙€佹暟閲忚皟鏁淬€佹浛浠ｉ」鍒囨崲銆佸壇浜х墿绉婚櫎銆佷富杈撳嚭璋冩暣銆佹仮澶嶃€佽緭鍏ユ帓搴忓拰缂栫爜鍓嶉獙璇併€?6. 鏂板椤圭洰銆侀厤鏂规爲鍜屾牱鏉胯崏绋跨殑鎾ら攢/閲嶅仛鑳藉姏锛屼互鍙婁慨鏀硅妭鐐圭殑鍙鍖栨彁绀恒€?
+#### 浼樺寲
+
+1. 浼樺寲涔濋噸鍘嬬缉鍦嗙煶绛夎秴澶ч噸澶嶉厤鏂规爲锛氬叡浜?DAG 鍒嗘敮銆侀ケ鍜屾暟閲忚繍绠椼€佸竷灞€缁撴灉澶嶇敤鍜屽垎甯ц嚜鍔ㄥ睍寮€銆?2. 鏂板 JEI 閰嶆柟鏌ヨ鍜岄厤鏂?ID 缂撳瓨銆佸悗鍙拌鍒掑彇娑堜笌浠ｆ鏍￠獙銆佸彲瑙佸尯鍩熻鍓€佽绱㈠紩銆佹覆鏌撶紦瀛樺拰鏍锋澘鑽夌澧為噺鍚屾銆?3. 浼樺寲璺ㄥ眰鐩稿悓鏉愭枡鐘舵€佸悓姝ャ€佹祦浣撲笌鍖栧鍝佹覆鏌擄紝浠ュ強 AE2 Utility 鍏卞瓨鏃剁殑鍒濆鍖栨祦绋嬨€?
+#### 淇
+
+1. 淇鐣岄潰鏂囧瓧涓庢帶浠堕噸鍙犮€佹偓娴潰鏉垮眰绾с€佹祦浣撳拰鍖栧鍝佽鍓?鏁伴噺銆佹垚褰㈤厤鏂圭┖妲藉竷灞€銆丮ekanism 鍖栧鍝佽涔夈€佸凡鏈夋牱鏉垮睍寮€闄愬埗銆佹牱鏉胯崏绋垮悓姝ュ拰鑺傜偣/鏉愭枡浜や簰闂銆?2. 淇鎭㈠銆佽緭鍏ユ帓搴忓拰鏇挎崲鎺у埗鐨勫竷灞€銆侀煶鏁堜笌鏄剧ず鏉′欢銆?
+#### 绉婚櫎
+
+1. 绉婚櫎 JEI 閰嶆柟甯冨眬棰勮鐨勯噸澶嶅灞傝竟妗嗗拰鏍锋澘鏁伴噺鏂囧瓧鐨勯澶栭粦鑹插簳妗嗐€?2. 绉婚櫎涓撶敤鏈嶅姟绔己鍒跺畨瑁?JEI Crafting Tree 鐨勮姹傦紝骞跺皢鏉愭枡妲芥暟閲忚皟鏁存敼涓虹洿鎺ユ粴杞搷浣溿€?
+#### 寮€鍙戣€?
+1. 鏂板 `CraftingTreeBackend`锛岀敤浜庣簿纭牱鏉垮垽鏂€佽矾绾挎寚绾广€佸彲澶嶇敤杈撳叆銆佹満鍣ㄦ爣璇嗐€佺紪鐮併€佷笂浼犲拰鏇挎崲鎺у埗銆?2. 鏂板缁撴瀯鍖栨牱鏉胯崏绋挎ā鍨嬪拰甯︾増鏈殑 `InventorySource` API銆?3. 绮剧‘鏍锋澘妫€娴嬫敼涓鸿矾绾挎晱鎰熺殑瑙勮寖鍖栭厤鏂规寚绾癸紝骞跺皢瀹㈡埛绔€丣EI銆丄E2 鍙€変緷璧栭檺鍒跺湪瀹㈡埛绔幆澧冦€?
 [v0.0.1]: https://github.com/lhy512103/JEI-Crafting-Tree/releases/tag/v0.0.1
+[v0.0.2]: https://github.com/lhy512103/JEI-Crafting-Tree/releases/tag/v0.0.2
+[v0.0.3]: https://github.com/lhy512103/JEI-Crafting-Tree/releases/tag/v0.0.3

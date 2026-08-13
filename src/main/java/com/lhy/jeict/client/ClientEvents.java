@@ -13,6 +13,7 @@ public final class ClientEvents {
     public static void onClientTickPost(net.neoforged.neoforge.client.event.ClientTickEvent.Post event) {
         RecipeTreeOpenHelper.onClientTickPost();
         RecipeTreeAutoCraftSession.tick();
+        if (Minecraft.getInstance().player == null) ClientInventorySnapshotCache.clearExpectedChanges();
         CraftingTreeApiEvents.onClientTick();
     }
 

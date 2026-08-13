@@ -59,6 +59,13 @@ public final class PatternEncodingSlot {
         }
     }
 
+    /** 鏍戜笂鐨勬浛浠ｅ搧鍒囨崲鍚屾鍒?draft 鏃朵娇鐢紱瓒婄晫绱㈠紩琚挸鍒躲€?*/
+    public void setSelectedAlternative(int index) {
+        if (alternatives.size() > 1) {
+            selectedAlternative = Math.max(0, Math.min(alternatives.size() - 1, index));
+        }
+    }
+
     public void setAmount(long amount) {
         this.amount = Math.max(1L, amount);
     }

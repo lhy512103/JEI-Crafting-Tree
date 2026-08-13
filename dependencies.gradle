@@ -3,6 +3,7 @@ dependencies {
     // Keep the compile API and runtime implementation on the same JEI build.
     compileOnly "curse.maven:jei-238222:8498870"
     compileOnly "org.appliedenergistics:appliedenergistics2:${ae2_version}"
+    compileOnly "curse.maven:sophisticated-core-618298:${sophisticated_core_file}"
 
     // Core runtime mods.
     localRuntime "org.appliedenergistics:guideme:${guideme_version}"
@@ -48,7 +49,7 @@ dependencies {
     // Keep Storage on the same Sophisticated Core API line as Backpacks.
     localRuntime "maven.modrinth:sophisticated-storage:8A8N1c9A"
     localRuntime "curse.maven:sophisticated-backpacks-422301:8503096"
-    localRuntime "curse.maven:sophisticated-core-618298:8503041"
+    localRuntime "curse.maven:sophisticated-core-618298:${sophisticated_core_file}"
     localRuntime "curse.maven:cloth-config-348521:${cloth_config_file}"
     localRuntime "curse.maven:logistics-network-1448257:${logistics_network_file}"
     localRuntime "curse.maven:bookshelf-228525:7606240"
@@ -74,7 +75,8 @@ dependencies {
     localRuntime "curse.maven:merequester-688367:${merequester_file}"
     localRuntime "curse.maven:applied-energistics-2-wireless-terminals-459929:${ae2wt_terminals_file}"
     localRuntime "curse.maven:ae2-crystal-science-1435174:8112039"
-    localRuntime "curse.maven:ae2-lightning-tech-1527395:8422767"
+    localRuntime "maven.modrinth:thunderbolt-core:${thunderbolt_core_version}"
+    localRuntime "maven.modrinth:ae2-lightning-tech:${ae2_lightning_tech_version}"
     localRuntime "curse.maven:data-energistics-1565514:8429524"
     // Prefer the sibling AE2 Utility development build so JEICT and its backend API stay in sync.
     // Published/dev environments without that checkout continue to use the CurseMaven release.
