@@ -1522,19 +1522,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             batchBadgeBounds = null;
             return null;
         }
-        int x = (int) Math.floor(logicalX * zoom + panX);
-        int y = (int) Math.floor(logicalY * zoom + panY);
-        int right = (int) Math.ceil((logicalX + logicalWidth) * zoom + panX);
-        int bottom = (int) Math.ceil((logicalY + logicalHeight) * zoom + panY);
-        int footerTop = this.height - currentFooterHeight();
-        boolean visible = x < canvasRight() - 2
-                && right > canvasLeft() + 2
-                && y < footerTop - 2
-                && bottom > HEADER_HEIGHT + 2;
-        batchBadgeBounds = visible
-                ? new BatchBadgeBounds(x, y, Math.max(1, right - x), Math.max(1, bottom - y))
-                : null;
-        return visible ? anchor : null;
+        int hitPadding = 3;
+        batchBadgeBounds = new BatchBadgeBounds(logicalX - hitPadding, logicalY - hitPadding,
+                Math.max(1, logicalWidth) + hitPadding * 2,
+                Math.max(1, logicalHeight) + hitPadding * 2);
+        return anchor;
     }
 
     private @Nullable RootBatchAnchor findRootBatchAnchor() {
@@ -4063,7 +4055,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             graphics.renderTooltip(this.font, List.of(headerTooltip), Optional.empty(), mouseX, mouseY);
             return;
         }
-        if (isPointInsideBatchBadge(mouseX, mouseY)) {
+        if (batchBadgeOwnerAt(mouseX, mouseY) != null) {
             graphics.renderTooltip(this.font,
                     List.of(Component.translatable("gui.jeict.recipe_tree.batch_tooltip")),
                     Optional.empty(), mouseX, mouseY);
@@ -4687,7 +4679,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         if (patternAmountEditor != null && patternAmountEditor.visible) {
             commitPatternAmountEditor();
         }
-        if (button == 0 && isPointInsideBatchBadge(mouseX, mouseY)) {
+        if (button == 0 && batchBadgeOwnerAt(mouseX, mouseY) != null) {
             return true;
         }
         boolean insideWorkspace = isInsideWorkspace(mouseX, mouseY);
@@ -5029,10 +5021,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             // The inspector owns wheel input even when all of its content currently fits.
             return true;
         }
-        if (isPointInsideBatchBadge(mouseX, mouseY)) {
+        RecipeTreeOverviewScreen batchOwner = batchBadgeOwnerAt(mouseX, mouseY);
+        if (batchOwner != null) {
             int direction = (int) Math.signum(scrollY);
             if (direction != 0) {
-                adjustBatchCount(direction * (Screen.hasShiftDown() ? 10 : 1));
+                batchOwner.adjustBatchCount(direction * (Screen.hasShiftDown() ? 10 : 1));
             }
             return true;
         }
@@ -7114,9 +7107,28 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 && mouseY >= button.getY() && mouseY <= button.getY() + button.getHeight();
     }
 
-    private boolean isPointInsideBatchBadge(double mouseX, double mouseY) {
-        updateBatchBadgeBounds();
-        return batchBadgeBounds != null && batchBadgeBounds.contains(mouseX, mouseY);
+    private @Nullable RecipeTreeOverviewScreen batchBadgeOwnerAt(double mouseX, double mouseY) {
+        RecipeTreeOverviewScreen host = workspaceHostScreen();
+        if (host != this) {
+            return host.batchBadgeOwnerAt(mouseX, mouseY);
+        }
+        double workspaceMouseX = (mouseX - host.panX) / host.zoom;
+        double workspaceMouseY = (mouseY - host.panY) / host.zoom;
+        for (WorkspaceTreePlacement placement : workspaceTreePlacements()) {
+            RecipeTreeOverviewScreen tree = placement.screen();
+            double treeMouseX = workspaceMouseX - placement.offsetX();
+            double treeMouseY = workspaceMouseY - placement.offsetY();
+            if (tree.isPointInsideBatchBadge(treeMouseX, treeMouseY)) {
+                return tree;
+            }
+        }
+        return null;
+    }
+
+    private boolean isPointInsideBatchBadge(double logicalMouseX, double logicalMouseY) {
+        // Rendering already produced this tree-local bound with the correct temporary workspace viewport.
+        // Recomputing it here would use the host viewport after renderAllWorkspaceTrees restored it.
+        return batchBadgeBounds != null && batchBadgeBounds.contains(logicalMouseX, logicalMouseY);
     }
 
     /** Invisible vanilla button used only for focus, narration and hit testing. */

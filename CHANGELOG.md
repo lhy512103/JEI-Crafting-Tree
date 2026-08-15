@@ -1,6 +1,20 @@
 # Changelog
 
-[v0.0.3](#v003) | [v0.0.2](#v002) | [v0.0.1](#v001--2026-07-23)
+[v0.0.4](#v004) | [v0.0.3](#v003) | [v0.0.2](#v002) | [v0.0.1](#v001--2026-07-23)
+
+## v0.0.4
+
+### English
+
+#### Fixed
+
+1. Fixed batch-count scrolling in the multi-tree workspace.
+
+### 中文
+
+#### 修复
+
+1. 修复多配方树工作区中无法通过滚轮调节批次的问题。
 
 ## v0.0.3
 
@@ -164,3 +178,4 @@
 [v0.0.1]: https://github.com/lhy512103/JEI-Crafting-Tree/releases/tag/v0.0.1
 [v0.0.2]: https://github.com/lhy512103/JEI-Crafting-Tree/releases/tag/v0.0.2
 [v0.0.3]: https://github.com/lhy512103/JEI-Crafting-Tree/releases/tag/v0.0.3
+[v0.0.4]: https://github.com/lhy512103/JEI-Crafting-Tree/releases/tag/v0.0.4
