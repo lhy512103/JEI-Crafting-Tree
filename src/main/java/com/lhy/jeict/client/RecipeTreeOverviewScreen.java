@@ -84,7 +84,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private static final double INITIAL_MIN_ZOOM = 0.7D;
     private static final double INITIAL_MAX_ZOOM = 1.0D;
     private static final int MACHINE_SLOT_SIZE = 18;
-    /** 涓庢牱鏉跨紪鐮佺粓绔?JEI 寮€鍏冲悓婧愬浘鏍囷紙8脳8 绾圭悊缂╂斁缁樺埗锛?*/
+    /** 与样板编码终端/JEI 开关同源图标（8×8 纹理缩放绘制） */
     private static final int TOP_MATERIALS_OFFSET = 100;
     private static final int INSPECTOR_WIDTH = 216;
     private static final int INSPECTOR_SCROLL_STEP = 18;
@@ -249,10 +249,10 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private int cachedRequiredPatternCount;
     private Component cachedRequiredPatternsTitleLine = Component.empty();
     private boolean autoMergeSameMaterials = true;
-    /** 鍏抽棴鍚庝笉婕旂畻鏍戜笂鐢ㄩ噺銆佹墍闇€鏍锋澘鏁帮紝涔熶笉鏌ヨ ME 涓槸鍚﹀凡鏈夋牱鏉匡紙鍑忚交鍗￠】锛?*/
+    /** 关闭后不演算树上用量、所需样板数，也不查询 ME 中是否已有样板（减轻卡顿） */
     private boolean computeRecipeQuantities = true;
     private Button computeQuantitiesButton;
-    /** 寮€鍚椂鑷姩灞曞紑銆孞EI 涓粎鏈変竴鏉″彲缂栫爜閰嶆柟銆嶇殑鏈В鏋愬垎鏀紱鑻ャ€屽凡鏈夋牱鏉?绂併€嶅垯璺宠繃缃戠粶涓凡鏈夋牱鏉跨殑鍒嗘敮锛堣 shouldBlockExpansion锛?*/
+    /** 开启时自动展开「JEI 中仅有一条可编码配方」的未解析分支；若「已有样板:禁」则跳过网络中已有样板的分支（见 shouldBlockExpansion） */
     private boolean autoExpandUniqueEncodableRecipe = false;
     private boolean suppressAutoExpandUniqueRecipePass;
     private boolean autoExpandUniqueSearchPending;
@@ -339,11 +339,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                     topMaterialRenderCacheDirty = true;
                     syncStyleButton();
                 });
-        this.zoomOutButton = chromeButton(this.width - 180, 8, 22, 20, Component.literal("鈭?), btn -> zoomAtCenter(-0.1D));
+        this.zoomOutButton = chromeButton(this.width - 180, 8, 22, 20, Component.literal("−"), btn -> zoomAtCenter(-0.1D));
         this.zoomInButton = chromeButton(this.width - 106, 8, 22, 20, Component.literal("+"), btn -> zoomAtCenter(0.1D));
         this.fitViewButton = chromeButton(this.width - 80, 8, 42, 20,
                 Component.translatable("gui.jeict.recipe_tree.overview_fit"), btn -> fitFocusedTreeView());
-        this.settingsButton = chromeButton(this.width - 34, 8, 26, 20, Component.literal("鈰?), btn -> {
+        this.settingsButton = chromeButton(this.width - 34, 8, 26, 20, Component.literal("⋮"), btn -> {
             settingsOpen = !settingsOpen;
             updateSelectionButtons();
         });
@@ -457,7 +457,8 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     /**
-     * 鏁伴噺/鎻愮ず绫诲紑鍏冲彉鍖栨椂锛屽彧閲嶅缓娓叉煋鎶曞奖锛屼笉鍐嶆璺戣嚜鍔ㄥ睍寮€娴佺▼銆?     */
+     * 数量/提示类开关变化时，只重建渲染投影，不再次跑自动展开流程。
+     */
     private void refreshRenderedProjection() {
         selectedNode = null;
         selectedLayerMaterial = null;
@@ -639,7 +640,8 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     /**
-     * 鎸夌鍚嶅悎骞舵湭瑙ｆ瀽杈撳叆锛屽皾璇曞鐢ㄥ敮涓€涓斿綋鍓嶅彲缂栫爜鐨?JEI 閰嶆柟銆傘€屽凡鏈夋牱鏉?绂併€嶆椂浠嶈繍琛岋紝浣嗚嫢璇ユ潗鏂欏湪 ME 宸叉湁鏍锋澘鍒欒烦杩囷紙shouldBlockExpansion锛夈€?     */
+     * 按签名合并未解析输入，尝试套用唯一且当前可编码的 JEI 配方。「已有样板:禁」时仍运行，但若该材料在 ME 已有样板则跳过（shouldBlockExpansion）。
+     */
     private boolean processAutoExpandUniqueRecipeSteps(int maxSteps) {
         long startedAt = RecipeTreePerfDebug.begin();
         if (suppressAutoExpandUniqueRecipePass || !autoExpandUniqueEncodableRecipe || !autoExpandUniqueSearchPending) {
@@ -846,7 +848,10 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     /**
-     * 灞傝鍥炬寜銆屽綋鍓嶅睍绀虹墿鍝併€嶈仛鍚堬細涓棿浜х墿锛坘ind=0锛変笌鍙跺瓙杈撳叆锛坘ind=1锛変笉鍐嶅垎寮€锛?     * 鏈夊€欓€?鏃犲€欓€夈€丯BT 宸紓绛夊睍绀轰负鍚屼竴鐗╁搧鏃跺綊骞躲€俥xpansionSignature 淇濈暀浠ュ尯鍒?     * 鍚屼竴鐗╁搧鐨勪笉鍚屽睍寮€/鏈睍寮€鐘舵€併€?     */
+     * 层视图按「当前展示物品」聚合：中间产物（kind=0）与叶子输入（kind=1）不再分开，
+     * 有候选/无候选、NBT 差异等展示为同一物品时归并。expansionSignature 保留以区分
+     * 同一物品的不同展开/未展开状态。
+     */
     private record LayerMaterialKey(String ingredientSignature, @Nullable String expansionSignature) {
     }
 
@@ -1184,7 +1189,9 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         Map<String, ItemTopMaterialAccumulator> itemMaterials = new LinkedHashMap<>();
         Map<String, GenericTopMaterialAccumulator> genericMaterials = new LinkedHashMap<>();
         collectGenericTopMaterials(context.root(), batchCount, itemMaterials, genericMaterials);
-        // 鍚屼竴鏉愭枡浠ャ€屽鍊欓€夈€嶄笌銆屽崟鍊欓€?鍏朵粬褰㈡€併€嶅嚭鐜版椂锛岀鍚嶄笉鍚屼細鍒嗘垚涓ゆ潯锛?        // 鎸夊睍绀虹墿鍝佸綊涓€鍖栫鍚嶉噸鏂板垎妗讹紝璺ㄦ《鍚堝苟鍒板悓涓€鏉★紙淇濈暀澶氬€欓€夎涔変笌 slots 绱㈠紩锛夈€?        Map<String, List<ItemTopMaterialAccumulator>> normalizedItemGroups = new LinkedHashMap<>();
+        // 同一材料以「多候选」与「单候选/其他形态」出现时，签名不同会分成两条；
+        // 按展示物品归一化签名重新分桶，跨桶合并到同一条（保留多候选语义与 slots 索引）。
+        Map<String, List<ItemTopMaterialAccumulator>> normalizedItemGroups = new LinkedHashMap<>();
         for (Map.Entry<String, ItemTopMaterialAccumulator> entry : itemMaterials.entrySet()) {
             ItemTopMaterialAccumulator accumulator = entry.getValue();
             String normalized = displayIngredientSignatureOf(accumulator.representative());
@@ -1515,19 +1522,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             batchBadgeBounds = null;
             return null;
         }
-        int x = (int) Math.floor(logicalX * zoom + panX);
-        int y = (int) Math.floor(logicalY * zoom + panY);
-        int right = (int) Math.ceil((logicalX + logicalWidth) * zoom + panX);
-        int bottom = (int) Math.ceil((logicalY + logicalHeight) * zoom + panY);
-        int footerTop = this.height - currentFooterHeight();
-        boolean visible = x < canvasRight() - 2
-                && right > canvasLeft() + 2
-                && y < footerTop - 2
-                && bottom > HEADER_HEIGHT + 2;
-        batchBadgeBounds = visible
-                ? new BatchBadgeBounds(x, y, Math.max(1, right - x), Math.max(1, bottom - y))
-                : null;
-        return visible ? anchor : null;
+        int hitPadding = 3;
+        batchBadgeBounds = new BatchBadgeBounds(logicalX - hitPadding, logicalY - hitPadding,
+                Math.max(1, logicalWidth) + hitPadding * 2,
+                Math.max(1, logicalHeight) + hitPadding * 2);
+        return anchor;
     }
 
     private @Nullable RootBatchAnchor findRootBatchAnchor() {
@@ -1634,7 +1633,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private record InputCluster(String signature, int layer, List<RecipeTreeInputViewModel> inputs) {
     }
 
-    /** 澶氬彧杈撳叆鏍煎瓙鎸囧悜鍚屼竴宸插睍寮€ {@link RecipeTreeNodeViewModel} 鏃跺悎鎴愬崟绨囷紝涓庡悎骞跺眰涓婂瀛愭爲鍘婚噸閫掑綊涓€鑷达紝鍑忓皯 GraphNode 鍒嗘敮銆?*/
+    /** 多只输入格子指向同一已展开 {@link RecipeTreeNodeViewModel} 时合成单簇，与合并层上对子树去重递归一致，减少 GraphNode 分支。 */
     private List<InputCluster> consolidateClustersSharingExpandedChild(List<InputCluster> clusters) {
         LinkedHashMap<RecipeTreeNodeViewModel, List<RecipeTreeInputViewModel>> expandedByChild = new LinkedHashMap<>();
         for (InputCluster cluster : clusters) {
@@ -1868,7 +1867,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         return false;
     }
 
-    /** 浠呭湪銆屽凡鏈夋牱鏉?绂併€嶄笖寮€鍚暟閲忔紨绠楁椂锛屾墠鍋?ME 宸叉湁鏍锋澘妫€娴嬩笌绾㈡/tooltip */
+    /** 仅在「已有样板:禁」且开启数量演算时，才做 ME 已有样板检测与红框/tooltip */
     private boolean shouldShowMeExistingPatternHints() {
         return context.disableExistingPatternExpansion() && computeRecipeQuantities;
     }
@@ -2993,8 +2992,8 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         Component summary = Component.translatable("gui.jeict.recipe_tree.footer_summary",
                 target.topMaterials.size() + target.genericTopMaterialRenderData.size(), target.cachedMissingMaterialCount)
                 .append(target.planningBusy
-                        ? Component.literal("  鈥?").append(Component.translatable("gui.jeict.recipe_tree.plan_calculating"))
-                        : Component.literal("  鈥?").append(Component.translatable("gui.jeict.recipe_tree.plan_totals",
+                        ? Component.literal("  • ").append(Component.translatable("gui.jeict.recipe_tree.plan_calculating"))
+                        : Component.literal("  • ").append(Component.translatable("gui.jeict.recipe_tree.plan_totals",
                                 target.planningResult.totalRawUnits(), target.planningResult.totalWasteUnits())));
         graphics.drawString(this.font, summary, canvasLeft() + 6, this.height - 21, theme.metricText(), false);
     }
@@ -3251,7 +3250,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                     drawEdgeJoint(graphics, endX, endY - 1, edgeColor);
                 }
                 if (cycleWarning) {
-                    graphics.drawCenteredString(this.font, "鈫?, endX, Math.max(midY, endY - 11), theme.danger());
+                    graphics.drawCenteredString(this.font, "↻", endX, Math.max(midY, endY - 11), theme.danger());
                 }
             }
         }
@@ -3490,7 +3489,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 if (material.cycleWarning()) {
                     int centerX = currentX + materialWidth / 2;
                     graphics.fill(centerX, rowY - 6, centerX + 1, rowY, theme.danger());
-                    graphics.drawCenteredString(this.font, "鈫?, centerX, rowY - 14, theme.danger());
+                    graphics.drawCenteredString(this.font, "↻", centerX, rowY - 14, theme.danger());
                 }
                 if (material == selectedLayerMaterial) {
                     RecipeTreeTheme.drawBorder(graphics, currentX - 1, rowY - 1,
@@ -3685,7 +3684,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 RecipeTreeTheme.drawMarkdownNode(graphics, currentX, y, currentX + width, y + NODE_HEIGHT,
                         data.cycleWarning() ? theme.danger() : theme.controlHoverText());
                 if (data.cycleWarning()) {
-                    graphics.drawString(this.font, "鈫?, currentX + width - 9, y + 2, theme.danger(), false);
+                    graphics.drawString(this.font, "↻", currentX + width - 9, y + 2, theme.danger(), false);
                 }
                 RecipeTreeTheme.drawSlot(graphics, currentX + 5, y + 5);
                 renderIngredientAt(graphics, leaf.ingredient(), currentX + 6, y + 6);
@@ -3754,7 +3753,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             graphics.fill(x + 1, y + NODE_HEIGHT - 3, x + width - 1, y + NODE_HEIGHT - 1, theme.patternHintBorder());
         }
         if (data.cycleWarning()) {
-            graphics.drawString(this.font, "鈫?, x + width - 9, y + 2, theme.danger(), false);
+            graphics.drawString(this.font, "↻", x + width - 9, y + 2, theme.danger(), false);
         }
     }
 
@@ -4056,7 +4055,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             graphics.renderTooltip(this.font, List.of(headerTooltip), Optional.empty(), mouseX, mouseY);
             return;
         }
-        if (isPointInsideBatchBadge(mouseX, mouseY)) {
+        if (batchBadgeOwnerAt(mouseX, mouseY) != null) {
             graphics.renderTooltip(this.font,
                     List.of(Component.translatable("gui.jeict.recipe_tree.batch_tooltip")),
                     Optional.empty(), mouseX, mouseY);
@@ -4680,7 +4679,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         if (patternAmountEditor != null && patternAmountEditor.visible) {
             commitPatternAmountEditor();
         }
-        if (button == 0 && isPointInsideBatchBadge(mouseX, mouseY)) {
+        if (button == 0 && batchBadgeOwnerAt(mouseX, mouseY) != null) {
             return true;
         }
         boolean insideWorkspace = isInsideWorkspace(mouseX, mouseY);
@@ -5022,10 +5021,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             // The inspector owns wheel input even when all of its content currently fits.
             return true;
         }
-        if (isPointInsideBatchBadge(mouseX, mouseY)) {
+        RecipeTreeOverviewScreen batchOwner = batchBadgeOwnerAt(mouseX, mouseY);
+        if (batchOwner != null) {
             int direction = (int) Math.signum(scrollY);
             if (direction != 0) {
-                adjustBatchCount(direction * (Screen.hasShiftDown() ? 10 : 1));
+                batchOwner.adjustBatchCount(direction * (Screen.hasShiftDown() ? 10 : 1));
             }
             return true;
         }
@@ -5806,8 +5806,10 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     /**
-     * 灞曠ず鐗╁搧褰掍竴鍖栫鍚嶏細鎸夈€屽綋鍓嶅睍绀虹殑鐗╁搧/娴佷綋銆嶈仛鍚堬紝蹇界暐鍊欓€夐泦鍚堜笌 NBT 宸紓锛?     * 鐢ㄤ簬灞傝鍥炬妸鍚屼竴鏉愭枡鐨勪笉鍚屽嚭鐜板舰鎬侊紙涓棿浜х墿杈撳嚭 vs 鍙跺瓙杈撳叆銆佹湁鍊欓€?vs 鏃犲€欓€夛級
-     * 褰掑苟涓轰竴鏉°€傛棤娉曡В鏋愭椂閫€鍥炲師绛惧悕锛屼繚璇佸厹搴曚笉鍚堝苟銆?     */
+     * 展示物品归一化签名：按「当前展示的物品/流体」聚合，忽略候选集合与 NBT 差异，
+     * 用于层视图把同一材料的不同出现形态（中间产物输出 vs 叶子输入、有候选 vs 无候选）
+     * 归并为一条。无法解析时退回原签名，保证兜底不合并。
+     */
     private String displayIngredientSignatureOf(RecipeTreeInputViewModel input) {
         ITypedIngredient<?> ingredient = resolveDisplayIngredient(input);
         if (ingredient != null) {
@@ -6071,7 +6073,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         });
     }
 
-    /** 浠呮鏌ラ涓潪绌哄閫夛紝閬垮厤 tag 鑶ㄨ儉鏃堕€犳垚鏌ヨ椋庢毚锛堜笌 JEI銆屽綋鍓嶅睍绀恒€嶈涔変竴鑷达級銆?*/
+    /** 仅检查首个非空备选，避免 tag 膨胀时造成查询风暴（与 JEI「当前展示」语义一致）。 */
     private boolean hasExistingPatternForRequestedIngredient(@Nullable RequestedIngredient ingredient) {
         CraftingTreeBackend backend = CraftingTreeBackends.get();
         if (backend == null || !backend.supportsExistingPatternHints() || ingredient == null) {
@@ -6336,7 +6338,9 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     /**
-     * 鏇夸唬鍝佸垏鎹㈠彧鏀规爲杈撳叆鐨勯€夋嫨锛屽凡缂撳瓨鐨?draft 浠嶆槸鍒囨崲鍓嶇殑蹇収锛涙妸鏀瑰姩鍚屾杩涘彈褰卞搷鐨?draft锛?     * 閬垮厤涓婁紶/缂栫爜浣跨敤鏃ф潗鏂欍€傚彧閬嶅巻琚垏鎹㈣緭鍏ユ墍鍦ㄩ厤鏂圭殑鑺傜偣锛屽紑閿€涓庝竴娆″竷灞€閲嶅缓鍚岀骇銆?     */
+     * 替代品切换只改树输入的选择，已缓存的 draft 仍是切换前的快照；把改动同步进受影响的 draft，
+     * 避免上传/编码使用旧材料。只遍历被切换输入所在配方的节点，开销与一次布局重建同级。
+     */
     private void syncDraftAlternativesForMembers(List<RecipeTreeInputViewModel> members) {
         if (patternDrafts.isEmpty() || members.isEmpty()) {
             return;
@@ -6374,7 +6378,9 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     /**
-     * 鎶婃爲涓婂綋鍓嶉€変腑鐨勬浛浠ｅ搧鍐欏叆 draft 瀵瑰簲妲戒綅锛屼繚鐣欑敤鎴峰湪妫€鏌ュ櫒閲岀殑鍏朵粬缂栬緫銆?     * 妲戒綅瀹氫綅涓?fromRecipe 鐨勬瀯閫犺鍒欎竴鑷达細CRAFTING 鎸?patternSlotIndex 钀戒綅锛屽惁鍒欐寜娑堣垂杈撳叆椤哄簭杩藉姞銆?     */
+     * 把树上当前选中的替代品写入 draft 对应槽位，保留用户在检查器里的其他编辑。
+     * 槽位定位与 fromRecipe 的构造规则一致：CRAFTING 按 patternSlotIndex 落位，否则按消费输入顺序追加。
+     */
     private void syncDraftAlternativesFromTree(PatternEncodingDraft draft, RecipeTreeRecipeViewModel recipe) {
         boolean crafting = draft.mode() == PatternEncodingMode.CRAFTING;
         int appendIndex = 0;
@@ -6741,7 +6747,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             searchBox.setHint(Component.literal(fullHint));
             return;
         }
-        String ellipsis = "鈥?;
+        String ellipsis = "…";
         String clipped = this.font.plainSubstrByWidth(fullHint,
                 Math.max(1, maxWidth - this.font.width(ellipsis)));
         searchBox.setHint(Component.literal(clipped + ellipsis));
@@ -7101,9 +7107,28 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 && mouseY >= button.getY() && mouseY <= button.getY() + button.getHeight();
     }
 
-    private boolean isPointInsideBatchBadge(double mouseX, double mouseY) {
-        updateBatchBadgeBounds();
-        return batchBadgeBounds != null && batchBadgeBounds.contains(mouseX, mouseY);
+    private @Nullable RecipeTreeOverviewScreen batchBadgeOwnerAt(double mouseX, double mouseY) {
+        RecipeTreeOverviewScreen host = workspaceHostScreen();
+        if (host != this) {
+            return host.batchBadgeOwnerAt(mouseX, mouseY);
+        }
+        double workspaceMouseX = (mouseX - host.panX) / host.zoom;
+        double workspaceMouseY = (mouseY - host.panY) / host.zoom;
+        for (WorkspaceTreePlacement placement : workspaceTreePlacements()) {
+            RecipeTreeOverviewScreen tree = placement.screen();
+            double treeMouseX = workspaceMouseX - placement.offsetX();
+            double treeMouseY = workspaceMouseY - placement.offsetY();
+            if (tree.isPointInsideBatchBadge(treeMouseX, treeMouseY)) {
+                return tree;
+            }
+        }
+        return null;
+    }
+
+    private boolean isPointInsideBatchBadge(double logicalMouseX, double logicalMouseY) {
+        // Rendering already produced this tree-local bound with the correct temporary workspace viewport.
+        // Recomputing it here would use the host viewport after renderAllWorkspaceTrees restored it.
+        return batchBadgeBounds != null && batchBadgeBounds.contains(logicalMouseX, logicalMouseY);
     }
 
     /** Invisible vanilla button used only for focus, narration and hit testing. */
