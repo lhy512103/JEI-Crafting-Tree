@@ -1,58 +1,80 @@
 package com.lhy.jeict.client;
 
-import com.lhy.jeict.Jeict;
-import com.lhy.jeict.client.screen.RecipeTreeScreen;
-import com.lhy.jeict.tree.RecipeGraphCache;
-import com.mojang.blaze3d.platform.InputConstants;
-import net.minecraft.client.KeyMapping;
-import net.minecraft.client.Minecraft;
-import net.minecraft.world.item.ItemStack;
-import net.minecraftforge.api.distmarker.Dist;
-import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
-import net.minecraftforge.client.settings.KeyConflictContext;
-import net.minecraftforge.event.TickEvent;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
-import net.minecraftforge.fml.common.Mod;
-import org.lwjgl.glfw.GLFW;
+import com.lhy.jeict.api.CraftingTreeApiEvents;
+import com.lhy.jeict.jei.RecipeTreeOpenHelper;
 
-@Mod.EventBusSubscriber(modid = Jeict.MODID, value = Dist.CLIENT)
+import net.minecraftforge.client.event.InputEvent;
+import com.lhy.jeict.config.RecipeTreeKeyMappings;
+import net.minecraftforge.client.event.RenderGuiEvent;
+import net.minecraftforge.client.event.ScreenEvent;
+import net.minecraftforge.event.TickEvent.ClientTickEvent;
+import net.minecraft.client.Minecraft;
+
 public final class ClientEvents {
-    private static final KeyMapping OPEN_TREE = new KeyMapping(
-            "key.jeict.open_tree",
-            KeyConflictContext.IN_GAME,
-            InputConstants.Type.KEYSYM,
-            GLFW.GLFW_KEY_K,
-            "key.categories.jeict"
-    );
+    public static void onClientTickPost(ClientTickEvent event) {
+        if (event.phase != net.minecraftforge.event.TickEvent.Phase.END) return;
+        RecipeTreeOpenHelper.onClientTickPost();
+        RecipeTreeAutoCraftSession.tick();
+        if (Minecraft.getInstance().player == null) ClientInventorySnapshotCache.clearExpectedChanges();
+        CraftingTreeApiEvents.onClientTick();
+    }
+
+    public static void onScreenOpening(ScreenEvent.Opening event) {
+        RecipeTreeOpenHelper.onScreenOpening(event);
+    }
+
+    public static void onScreenClosing(ScreenEvent.Closing event) {
+        RecipeTreeOpenHelper.onScreenClosing(event);
+    }
 
     private ClientEvents() {
     }
 
-    public static void registerKeyMappings(RegisterKeyMappingsEvent event) {
-        event.register(OPEN_TREE);
+    public static void onKeyInput(InputEvent.Key event) {
+        if (event.getAction() == 1 && Minecraft.getInstance().screen != null) {
+            RecipeTreeKeyMappings.handle(Minecraft.getInstance().screen);
+        }
     }
 
-    @SubscribeEvent
-    public static void clientTick(TickEvent.ClientTickEvent event) {
-        if (event.phase != TickEvent.Phase.END) {
-            return;
+    public static void onRenderGuiPost(RenderGuiEvent.Post event) {
+        if (Minecraft.getInstance().screen == null) {
+            FloatingMaterialOverlayState.updateDrag();
+            FloatingMaterialOverlayState.render(event.getGuiGraphics());
         }
-        Minecraft minecraft = Minecraft.getInstance();
-        while (OPEN_TREE.consumeClick()) {
-            if (minecraft.player == null || minecraft.level == null) {
-                continue;
-            }
-            ItemStack goal = minecraft.player.getMainHandItem();
-            if (goal.isEmpty()) {
-                goal = minecraft.player.getOffhandItem();
-            }
-            if (goal.isEmpty()) {
-                continue;
-            }
-            ItemStack finalGoal = goal.copy();
-            RecipeGraphCache.get(minecraft)
-                    .flatMap(cache -> cache.createTree(finalGoal))
-                    .ifPresent(tree -> minecraft.setScreen(new RecipeTreeScreen(tree)));
+    }
+
+    public static void onScreenRenderPost(ScreenEvent.Render.Post event) {
+        FloatingMaterialOverlayState.updateDrag();
+        FloatingMaterialOverlayState.render(event.getGuiGraphics());
+        JeiRecipeTreeShortcutOverlay.render(event);
+    }
+
+    public static void onScreenMousePressed(ScreenEvent.MouseButtonPressed.Pre event) {
+        if (RecipeTreeAutoCraftSession.status().running()
+                && !FloatingMaterialOverlayState.isAutoCraftButtonAt(event.getMouseX(), event.getMouseY())) {
+            RecipeTreeAutoCraftSession.cancelForManualInput();
         }
+        if (JeiRecipeTreeShortcutOverlay.handleMousePressed(event)) return;
+        FloatingMaterialOverlayState.handleScreenMouseClicked(event);
+    }
+
+    public static void onScreenMouseReleased(ScreenEvent.MouseButtonReleased.Pre event) {
+        FloatingMaterialOverlayState.handleScreenMouseReleased(event);
+    }
+
+    public static void onScreenMouseDragged(ScreenEvent.MouseDragged.Pre event) {
+        FloatingMaterialOverlayState.handleScreenMouseDragged(event);
+    }
+
+    public static void onScreenMouseScrolled(ScreenEvent.MouseScrolled.Pre event) {
+        FloatingMaterialOverlayState.handleScreenMouseScrolled(event);
+    }
+
+    public static void onMouseButton(InputEvent.MouseButton.Pre event) {
+        FloatingMaterialOverlayState.handleMouseButton(event);
+    }
+
+    public static void onMouseScrolled(InputEvent.MouseScrollingEvent event) {
+        FloatingMaterialOverlayState.handleMouseScrolled(event);
     }
 }

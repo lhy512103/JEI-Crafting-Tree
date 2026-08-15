@@ -2,6 +2,7 @@ package com.lhy.jeict.tree;
 
 import com.lhy.jeict.Config;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
@@ -17,8 +18,20 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+/**
+ * 配方图缓存。
+ *
+ * <p>历史实现是一个全局 static 单例，仅在 JEI 运行时关闭时清除；
+ * 这意味着玩家切换世界 / 配方表 reload 后，缓存仍保留旧 {@link RegistryAccess}
+ * 与旧 {@link Recipe} 引用，会出现查询错位。本实现改为：
+ * <ul>
+ *   <li>按 {@link ClientLevel} 维度键分桶，离开世界即自动失效；</li>
+ *   <li>对外暴露 {@link #clear()} 在 reload / unload 时主动调用；</li>
+ *   <li>{@link #get(Minecraft)} 加主线程检查，避免异步路径触发构建。</li>
+ * </ul>
+ */
 public final class RecipeGraphCache {
-    private static RecipeGraphCache current;
+    private static final Map<ResourceLocation, RecipeGraphCache> BY_LEVEL = new HashMap<>();
 
     private final Map<IngredientKey, List<RecipeNode>> recipesByOutput = new HashMap<>();
 
@@ -38,17 +51,27 @@ public final class RecipeGraphCache {
     }
 
     public static Optional<RecipeGraphCache> get(Minecraft minecraft) {
-        if (minecraft.level == null) {
+        if (minecraft == null || minecraft.level == null) {
             return Optional.empty();
         }
-        if (current == null) {
-            current = new RecipeGraphCache(minecraft);
+        // 防御：避免异步路径触发构建（recipe manager 读取必须在主线程）
+        if (!minecraft.isSameThread()) {
+            return Optional.empty();
         }
-        return Optional.of(current);
+        ResourceLocation levelKey = minecraft.level.dimension().location();
+        return Optional.of(BY_LEVEL.computeIfAbsent(levelKey, key -> new RecipeGraphCache(minecraft)));
     }
 
     public static void clear() {
-        current = null;
+        BY_LEVEL.clear();
+    }
+
+    /** 仅失效指定维度的缓存（用于单世界 unload）。 */
+    public static void clear(ResourceLocation levelKey) {
+        if (levelKey == null) {
+            return;
+        }
+        BY_LEVEL.remove(levelKey);
     }
 
     public Optional<RecipeTree> createTree(ItemStack goal) {
@@ -66,7 +89,7 @@ public final class RecipeGraphCache {
 
     public List<RecipeNode> candidates(IngredientKey key) {
         List<RecipeNode> nodes = recipesByOutput.getOrDefault(key, List.of());
-        int limit = Math.min(Config.maxCandidatesPerIngredient, nodes.size());
+        int limit = Math.min(Config.maxCandidatesPerIngredient(), nodes.size());
         return nodes.subList(0, limit);
     }
 
@@ -77,7 +100,7 @@ public final class RecipeGraphCache {
             node.cycle(true);
             return node;
         }
-        if (depth >= Config.maxTreeDepth || state.nodes >= Config.maxTreeNodes) {
+        if (depth >= Config.maxTreeDepth() || state.nodes >= Config.maxTreeNodes()) {
             node.limited(true);
             path.remove(key);
             return node;
@@ -89,6 +112,8 @@ public final class RecipeGraphCache {
         Optional<RecipeNode> rememberedNode = rememberedRecipe
                 .flatMap(id -> recipes.stream().filter(recipe -> recipe.id().equals(id)).findFirst());
         if (rememberedNode.isEmpty() && recipes.size() != 1) {
+            // 没有可选配方（候选数为 0 或大于 1 且没记忆）。标记为 noRecipe 让 UI 显式提示。
+            node.noRecipe(true);
             path.remove(key);
             return node;
         }
@@ -118,13 +143,16 @@ public final class RecipeGraphCache {
                     .filter(remembered -> ingredient.test(remembered))
                     .orElse(alternatives[0])
                     .copy();
+            // 路径 4：统一把展示用 stack 拉平成 count=1，原 count 通过独立通道累加，避免 NBT 带 count 的极端情况。
+            int originalCount = Math.max(1, childStack.getCount());
+            childStack.setCount(1);
             IngredientKey childKey = IngredientKey.of(childStack);
             displayStacks.putIfAbsent(childKey, childStack);
-            counts.merge(childKey, childStack.getCount(), Integer::sum);
+            counts.merge(childKey, originalCount, Integer::sum);
             alternativesByKey.putIfAbsent(childKey, List.of(alternatives));
         }
         for (Map.Entry<IngredientKey, Integer> entry : counts.entrySet()) {
-            if (state.nodes >= Config.maxTreeNodes) {
+            if (state.nodes >= Config.maxTreeNodes()) {
                 node.limited(true);
                 break;
             }

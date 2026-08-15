@@ -119,6 +119,11 @@ repositories {
         }
     }
 
+    maven {
+        url = 'https://api.modrinth.com/maven'
+        content { includeGroup 'maven.modrinth' }
+    }
+
     // Put repositories for dependencies here
     // ForgeGradle automatically adds the Forge maven and Maven Central for you
 
@@ -141,15 +146,27 @@ dependencies {
     compileOnly "mezz.jei:jei-${minecraft_version}-forge:${jei_version}"
     runtimeOnly fg.deobf("mezz.jei:jei-${minecraft_version}-forge:${jei_version}")
 
-    // Example mod dependency using a mod jar from ./libs with a flat dir repository
-    // This maps to ./libs/coolmod-${mc_version}-${coolmod_version}.jar
-    // The group id is ignored when searching -- in this case, it is "blank"
-    // implementation fg.deobf("blank:coolmod-${mc_version}:${coolmod_version}")
+    // Optional integrations are compile-time dependencies and are not bundled.
+    compileOnly files("${System.getProperty('user.home')}/.gradle/caches/modules-2/files-2.1/appeng/appliedenergistics2-forge/${ae2_version}/c6cd4b3a1ae51d50ce177b76ee81e245d5222129/appliedenergistics2-forge-${ae2_version}.jar")
+    compileOnly "maven.modrinth:sophisticated-core:${sophisticated_core_version}"
 
-    // For more info:
-    // http://www.gradle.org/docs/current/userguide/artifact_dependencies_tutorial.html
-    // http://www.gradle.org/docs/current/userguide/dependency_management.html
+    // Test dependencies
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.1'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+}
+
+// Example mod dependency using a mod jar from ./libs with a flat dir repository
+// This maps to ./libs/coolmod-${mc_version}-${coolmod_version}.jar
+// The group id is ignored when searching -- in this case, it is "blank"
+// implementation fg.deobf("blank:coolmod-${mc_version}:${coolmod_version}")
+
+// For more info:
+// http://www.gradle.org/docs/current/userguide/artifact_dependencies_tutorial.html
+// http://www.gradle.org/docs/current/userguide/dependency_management.html
 
 // This block of code expands all declared replace properties in the specified resource targets.
 // A missing property will result in an error. Properties are expanded using ${} Groovy notation.

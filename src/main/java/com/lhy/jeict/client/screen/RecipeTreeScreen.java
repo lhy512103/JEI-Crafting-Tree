@@ -34,12 +34,15 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.Ingredient;
+import com.lhy.jeict.client.screen.layout.LayoutNode;
+import com.lhy.jeict.client.screen.layout.RecipeTreeLayout;
 import net.minecraft.world.item.crafting.Recipe;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -62,12 +65,48 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
     private static final int NODE_BORDER = 0xE6FFFFFF;
     private static final int NODE_BORDER_HOVER = 0xFFFFFFFF;
     private static final int NODE_BORDER_SELECTED = 0xFF0D6F86;
+    private static final int INVENTORY_ENOUGH_BORDER = COST_TOTAL_BORDER;
+    private static final int INVENTORY_PARTIAL_BORDER = COST_LEFTOVER_BORDER;
+    private static final int INVENTORY_MISSING_BORDER = 0xFFD46D63;
+    private static final int INVENTORY_PANEL_BG = 0xF4E8ECEF;
+    private static final int INVENTORY_PANEL_BORDER = 0xFF6B777C;
+    private static final int INVENTORY_PANEL_MIN_WIDTH = 136;
+    private static final int INVENTORY_PANEL_ROW_HEIGHT = 20;
+    private static final int INVENTORY_PANEL_HEADER_HEIGHT = 14;
+    private static final int INVENTORY_PANEL_FILTER_HEIGHT = 15;
+    private static final int INVENTORY_PANEL_PADDING = 5;
+    private static final int INVENTORY_PANEL_CONTROL_SIZE = 12;
+    private static final int INVENTORY_PANEL_MAX_ROWS = 8;
+    private static final double INVENTORY_TEXT_SCALE = 7.0 / 9.0;
 
     private final RecipeTree tree;
     private final List<LayoutNode> layoutNodes = new ArrayList<>();
+    /**
+     * 路径 7：layoutNodes 命中查找原先是 O(N) 线性扫，频繁命中测试开销随节点数线性增长。
+     * 这里并行维护一份 {@link TreeNode -> LayoutNode} 索引，layoutFor 改为 O(1) 查表。
+     */
+    private final IdentityHashMap<TreeNode, LayoutNode> layoutNodeMap = new IdentityHashMap<>();
+    /**
+     * 路径 5：同一次 rebuildLayout 内的 measure 记忆化缓存，避免重复递归。
+     * 每次 rebuildLayout 入口处 clear，跨帧不复用（zoom/树结构变化都需重算）。
+     */
+    private final IdentityHashMap<TreeNode, Integer> measureCache = new IdentityHashMap<>();
+    /**
+     * 路径 6：layout 重建脏标记。仅当 zoom / pan / 屏幕 size 变化或树结构变化时置 true，
+     * render 主流程据此跳过同布局帧的无谓重建。
+     */
+    private boolean layoutDirty = true;
+    private double lastZoom = Double.NaN;
+    private int lastPanX = Integer.MIN_VALUE;
+    private int lastPanY = Integer.MIN_VALUE;
+    private int lastWidth = Integer.MIN_VALUE;
+    private int lastHeight = Integer.MIN_VALUE;
     private final List<CostLayout> costLayouts = new ArrayList<>();
-    private final Map<ResourceLocation, Optional<IDrawable>> recipeIconCache = new HashMap<>();
-    private final Map<ResourceLocation, Optional<IRecipeLayoutDrawable<?>>> recipePreviewCache = new HashMap<>();
+    private final List<InventoryCompareEntry> inventoryCompareEntries = new ArrayList<>();
+    private final List<InventoryCompareLayout> inventoryCompareLayouts = new ArrayList<>();
+    private final List<FilterLayout> inventoryFilterLayouts = new ArrayList<>();
+    private final Map<ResourceLocation, Optional<IDrawable>> recipeIconCache = newLruCache(64);
+    private final Map<ResourceLocation, Optional<IRecipeLayoutDrawable<?>>> recipePreviewCache = newLruCache(32);
     private double zoom = 1.0;
     private int panX;
     private int panY;
@@ -77,6 +116,18 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
     private int lastMouseY;
     private String batchInput = "";
     private TreeNode dropdownNode;
+    private ButtonLayout inventoryCompareButton;
+    private ButtonLayout inventoryCloseButton;
+    private ButtonLayout inventoryPinButton;
+    private boolean inventoryCompareOpen;
+    private boolean inventoryComparePinned;
+    private InventoryFilter inventoryFilter = InventoryFilter.ALL;
+    private int inventoryPanelX = -1;
+    private int inventoryPanelY = -1;
+    private boolean inventoryPanelDragging;
+    private int inventoryPanelDragOffsetX;
+    private int inventoryPanelDragOffsetY;
+    private int inventoryScrollOffset;
 
     public RecipeTreeScreen(RecipeTree tree) {
         this(new ContainerTransfer(), Minecraft.getInstance().player.getInventory(), tree);
@@ -105,11 +156,32 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         graphics.fill(0, 0, width, height, SCREEN_BG);
         renderHelp(graphics);
-        rebuildLayout();
+        // 路径 6：检测 zoom / pan / 屏幕尺寸是否变化；任一变化或显式 dirty 即重建 layout。
+        if (layoutDirty
+                || zoom != lastZoom
+                || panX != lastPanX
+                || panY != lastPanY
+                || width != lastWidth
+                || height != lastHeight) {
+            rebuildLayout();
+            layoutDirty = false;
+            lastZoom = zoom;
+            lastPanX = panX;
+            lastPanY = panY;
+            lastWidth = width;
+            lastHeight = height;
+        }
         costLayouts.clear();
-        renderTotals(graphics);
+        inventoryCompareEntries.clear();
+        inventoryCompareLayouts.clear();
+        inventoryFilterLayouts.clear();
+        inventoryCompareButton = null;
+        inventoryCloseButton = null;
+        inventoryPinButton = null;
+        renderTotals(graphics, mouseX, mouseY);
         renderBranches(graphics);
         renderNodes(graphics, mouseX, mouseY);
+        renderInventoryComparePanel(graphics, mouseX, mouseY);
         renderNodeTooltip(graphics, mouseX, mouseY);
         for (Renderable renderable : this.renderables) {
             renderable.render(graphics, mouseX, mouseY, partialTick);
@@ -129,33 +201,45 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         int y = 8;
         graphics.drawString(font, title, x, y, 0xFF2E3D42, false);
         y += font.lineHeight + 4;
-        graphics.drawString(font, "左键：打开 JEI 选择下级配方", x, y, 0xFF3F4C51, false);
+        graphics.drawString(font, Component.translatable("screen.jeict.help.left_click"), x, y, 0xFF3F4C51, false);
         y += font.lineHeight + 2;
-        graphics.drawString(font, "右键节点：折叠/展开    右键拖拽：移动视图", x, y, 0xFF3F4C51, false);
+        graphics.drawString(font, Component.translatable("screen.jeict.help.right_click"), x, y, 0xFF3F4C51, false);
         y += font.lineHeight + 2;
-        graphics.drawString(font, "滚轮节点：调批次数    Ctrl+滚轮：缩放", x, y, 0xFF3F4C51, false);
+        graphics.drawString(font, Component.translatable("screen.jeict.help.scroll_batch"), x, y, 0xFF3F4C51, false);
     }
 
     private void rebuildLayout() {
         layoutNodes.clear();
+        // 路径 5：measure/layout 在同一子树上会反复递归，每帧复杂度近似 O(N²)。
+        // 这里用 IdentityHashMap 在单次 rebuild 内做记忆化，等价于把 measure/layout 都降到 O(N)。
+        measureCache.clear();
+        layoutNodeMap.clear();
         int treeWidth = measure(tree.root());
         int startX = width / 2 - scale(treeWidth) / 2 + panX;
         layout(tree.root(), startX, 140 + panY, treeWidth);
     }
 
     private int measure(TreeNode node) {
+        Integer cached = measureCache.get(node);
+        if (cached != null) {
+            return cached;
+        }
         List<TreeNode> children = visibleChildren(node);
+        int result;
         if (children.isEmpty()) {
-            return nodeWidth(node);
-        }
-        int childrenWidth = 0;
-        for (int i = 0; i < children.size(); i++) {
-            if (i > 0) {
-                childrenWidth += SIBLING_GAP;
+            result = nodeWidth(node);
+        } else {
+            int childrenWidth = 0;
+            for (int i = 0; i < children.size(); i++) {
+                if (i > 0) {
+                    childrenWidth += SIBLING_GAP;
+                }
+                childrenWidth += measure(children.get(i));
             }
-            childrenWidth += measure(children.get(i));
+            result = Math.max(nodeWidth(node), childrenWidth);
         }
-        return Math.max(nodeWidth(node), childrenWidth);
+        measureCache.put(node, result);
+        return result;
     }
 
     private void layout(TreeNode node, int left, int y, int subtreeWidth) {
@@ -164,7 +248,9 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         int nodeH = scale(NODE_HEIGHT);
         int itemCenterX = left + scaledSubtree / 2;
         int x = itemCenterX - itemCenterOffset(node);
-        layoutNodes.add(new LayoutNode(node, x, y, nodeW, nodeH, itemCenterX, scale(ITEM_ICON_SIZE)));
+        LayoutNode layoutNode = new LayoutNode(node, x, y, nodeW, nodeH, itemCenterX, scale(ITEM_ICON_SIZE));
+        layoutNodes.add(layoutNode);
+        layoutNodeMap.put(node, layoutNode);
         List<TreeNode> children = visibleChildren(node);
         int childLeft = left + (scaledSubtree - scale(childrenWidth(children))) / 2;
         for (TreeNode child : children) {
@@ -265,12 +351,8 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
     }
 
     private LayoutNode layoutFor(TreeNode node) {
-        for (LayoutNode layoutNode : layoutNodes) {
-            if (layoutNode.node() == node) {
-                return layoutNode;
-            }
-        }
-        return null;
+        // 路径 7：命中查找从 O(N) 线性扫描改为 O(1) 查表。
+        return layoutNodeMap.get(node);
     }
 
     private void renderNodes(GuiGraphics graphics, int mouseX, int mouseY) {
@@ -382,6 +464,10 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         if (node.cycle() || node.limited()) {
             return 0xFFF08A1A;
         }
+        // 路径 3：无配方可选的节点用灰色，便于玩家一眼看到"该叶子需要手动指定配方"。
+        if (node.noRecipe()) {
+            return 0xFF9BA3A6;
+        }
         int depth = node.depth() % 4;
         if (depth == 0) {
             return 0xFF1488A6;
@@ -407,7 +493,7 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         graphics.drawString(font, text, badgeX, badgeY, textColor, false);
     }
 
-    private void renderTotals(GuiGraphics graphics) {
+    private void renderTotals(GuiGraphics graphics, int mouseX, int mouseY) {
         LayoutNode root = layoutFor(tree.root());
         if (root == null) {
             return;
@@ -418,25 +504,56 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         if (costs.isEmpty() && leftovers.isEmpty()) {
             return;
         }
-        boolean hasLeftovers = !leftovers.isEmpty();
-        int rowsHeight = hasLeftovers ? COST_ROW_HEIGHT * 2 + 8 : COST_ROW_HEIGHT;
+
+        List<CostDisplayEntry> totalEntries = entriesForCosts(costs);
+        for (CostDisplayEntry entry : totalEntries) {
+            inventoryCompareEntries.add(new InventoryCompareEntry(entry.key(), entry.stack(), entry.count(), entry.owned(), entry.status()));
+        }
+        List<CostDisplayEntry> leftoverEntries = entriesForLeftovers(leftovers);
+        boolean hasTotals = !totalEntries.isEmpty();
+        boolean hasLeftovers = !leftoverEntries.isEmpty();
+        int rowCount = (hasTotals ? 1 : 0) + (hasLeftovers ? 1 : 0);
+        int rowsHeight = rowCount > 1 ? COST_ROW_HEIGHT * 2 + 8 : COST_ROW_HEIGHT;
         int y = root.y() - scale(rowsHeight) - scale(22);
-        renderCostStrip(graphics, Component.translatable("screen.jeict.total_cost"), entriesFor(costs, COST_TOTAL_BORDER), root.centerX(), y);
+
+        if (hasTotals) {
+            CostStripLayout totalStrip = renderCostStrip(graphics, Component.translatable("screen.jeict.total_cost"), totalEntries, root.centerX(), y);
+            renderInventoryCompareButton(graphics, totalStrip, mouseX, mouseY);
+            if (shouldRenderInventoryComparePanel()) {
+                ensureInventoryPanelPosition(totalStrip);
+            }
+        }
         if (hasLeftovers) {
-            renderCostStrip(graphics, Component.translatable("screen.jeict.leftovers"), entriesFor(leftovers, COST_LEFTOVER_BORDER), root.centerX(), y + scale(COST_ROW_HEIGHT + 8));
+            int leftoverY = hasTotals ? y + scale(COST_ROW_HEIGHT + 8) : y;
+            renderCostStrip(graphics, Component.translatable("screen.jeict.leftovers"), leftoverEntries, root.centerX(), leftoverY);
         }
     }
 
-    private List<CostDisplayEntry> entriesFor(Map<IngredientKey, CostEntry> entries, int border) {
+    private List<CostDisplayEntry> entriesForCosts(Map<IngredientKey, CostEntry> entries) {
         List<CostDisplayEntry> displayEntries = new ArrayList<>();
-        entries.values().stream()
-                .sorted(Comparator.comparing(entry -> entry.stack().getHoverName().getString()))
-                .map(entry -> new CostDisplayEntry(entry.stack(), entry.count(), border))
+        entries.entrySet().stream()
+                .sorted(Comparator.comparing(entry -> entry.getValue().stack().getHoverName().getString()))
+                .map(entry -> {
+                    IngredientKey key = entry.getKey();
+                    CostEntry cost = entry.getValue();
+                    int owned = ownedCount(key);
+                    InventoryStatus status = inventoryStatus(cost.count(), owned);
+                    return new CostDisplayEntry(key, cost.stack(), cost.count(), inventoryBorder(status), owned, status, true);
+                })
                 .forEach(displayEntries::add);
         return displayEntries;
     }
 
-    private void renderCostStrip(GuiGraphics graphics, Component label, List<CostDisplayEntry> entries, int centerX, int y) {
+    private List<CostDisplayEntry> entriesForLeftovers(Map<IngredientKey, CostEntry> entries) {
+        List<CostDisplayEntry> displayEntries = new ArrayList<>();
+        entries.entrySet().stream()
+                .sorted(Comparator.comparing(entry -> entry.getValue().stack().getHoverName().getString()))
+                .map(entry -> new CostDisplayEntry(entry.getKey(), entry.getValue().stack(), entry.getValue().count(), COST_LEFTOVER_BORDER, 0, InventoryStatus.MISSING, false))
+                .forEach(displayEntries::add);
+        return displayEntries;
+    }
+
+    private CostStripLayout renderCostStrip(GuiGraphics graphics, Component label, List<CostDisplayEntry> entries, int centerX, int y) {
         int labelWidth = scaledTextWidth(label.getString());
         int totalWidth = 0;
         for (CostDisplayEntry entry : entries) {
@@ -444,14 +561,16 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         }
         totalWidth += Math.max(0, entries.size() - 1) * scale(COST_CELL_GAP);
         int rowWidth = labelWidth + scale(8) + totalWidth;
-        int x = centerX - rowWidth / 2;
-        drawScaledString(graphics, label.getString(), x, y + (scale(COST_ROW_HEIGHT) - scaledFontHeight()) / 2, 0xFF2F3E43, false);
+        int rowHeight = scale(COST_ROW_HEIGHT);
+        int rowX = centerX - rowWidth / 2;
+        int x = rowX;
+        drawScaledString(graphics, label.getString(), x, y + (rowHeight - scaledFontHeight()) / 2, 0xFF2F3E43, false);
         x += labelWidth + scale(8);
         for (CostDisplayEntry entry : entries) {
             int cellWidth = costCellWidth(entry);
-            int cellHeight = scale(COST_ROW_HEIGHT);
+            int cellHeight = rowHeight;
             drawBox(graphics, x, y, cellWidth, cellHeight, 0xF7F9FAFB, entry.border());
-            costLayouts.add(new CostLayout(entry.stack(), x, y, cellWidth, cellHeight));
+            costLayouts.add(new CostLayout(entry.key(), entry.stack(), entry.count(), entry.owned(), entry.status(), entry.inventoryAware(), x, y, cellWidth, cellHeight));
 
             ItemStack stack = entry.stack().copy();
             stack.setCount(1);
@@ -468,10 +587,345 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
             drawScaledString(graphics, countText, iconX + scale(20), y + (cellHeight - scaledFontHeight()) / 2, 0xFF2F3E43, false);
             x += cellWidth + scale(COST_CELL_GAP);
         }
+        return new CostStripLayout(rowX, y, rowWidth, rowHeight);
+    }
+
+    private void renderInventoryCompareButton(GuiGraphics graphics, CostStripLayout totalStrip, int mouseX, int mouseY) {
+        int size = scale(14);
+        int x = totalStrip.x() + totalStrip.width() + scale(6);
+        int y = totalStrip.y() + (totalStrip.height() - size) / 2;
+        inventoryCompareButton = new ButtonLayout(x, y, size, size);
+        boolean hovered = inventoryCompareButton.contains(mouseX, mouseY);
+        int fill = hovered || shouldRenderInventoryComparePanel() ? 0xFFFFFFFF : 0xE6F4F6F7;
+        drawBox(graphics, x, y, size, size, fill, INVENTORY_PANEL_BORDER);
+        int midX = x + size / 2;
+        int midY = y + size / 2;
+        int arm = Math.max(1, scale(4));
+        int thickness = Math.max(1, scale(1));
+        graphics.fill(midX - arm, midY - thickness / 2, midX + arm + thickness, midY - thickness / 2 + thickness, 0xFF2F3E43);
+        graphics.fill(midX - thickness / 2, midY - arm, midX - thickness / 2 + thickness, midY + arm + thickness, 0xFF2F3E43);
     }
 
     private int costCellWidth(CostDisplayEntry entry) {
         return scale(4 + 16 + 5) + scaledTextWidth("x" + entry.count()) + scale(6);
+    }
+
+    private int ownedCount(IngredientKey key) {
+        if (minecraft == null || minecraft.player == null) {
+            return 0;
+        }
+        Inventory inventory = minecraft.player.getInventory();
+        int total = 0;
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
+            if (!stack.isEmpty() && key.matches(stack)) {
+                total += stack.getCount();
+            }
+        }
+        return total;
+    }
+
+    private InventoryStatus inventoryStatus(int needed, int owned) {
+        if (owned >= needed) {
+            return InventoryStatus.ENOUGH;
+        }
+        if (owned > 0) {
+            return InventoryStatus.PARTIAL;
+        }
+        return InventoryStatus.MISSING;
+    }
+
+    private int inventoryBorder(InventoryStatus status) {
+        return switch (status) {
+            case ENOUGH -> INVENTORY_ENOUGH_BORDER;
+            case PARTIAL -> INVENTORY_PARTIAL_BORDER;
+            case MISSING -> INVENTORY_MISSING_BORDER;
+        };
+    }
+
+    private int inventoryStatusColor(InventoryStatus status) {
+        return switch (status) {
+            case ENOUGH -> INVENTORY_ENOUGH_BORDER;
+            case PARTIAL -> INVENTORY_PARTIAL_BORDER;
+            case MISSING -> INVENTORY_MISSING_BORDER;
+        };
+    }
+
+    private ChatFormatting inventoryStatusFormatting(InventoryStatus status) {
+        return switch (status) {
+            case ENOUGH -> ChatFormatting.GREEN;
+            case PARTIAL -> ChatFormatting.GOLD;
+            case MISSING -> ChatFormatting.RED;
+        };
+    }
+
+    private Component inventoryStatusText(InventoryStatus status) {
+        return Component.translatable(switch (status) {
+            case ENOUGH -> "screen.jeict.inventory_compare.status_enough";
+            case PARTIAL -> "screen.jeict.inventory_compare.status_partial";
+            case MISSING -> "screen.jeict.inventory_compare.status_missing";
+        });
+    }
+
+    private Component inventoryCompareStatusText(int needed, int owned, InventoryStatus status) {
+        if (status == InventoryStatus.ENOUGH) {
+            return inventoryStatusText(status);
+        }
+        return Component.translatable("screen.jeict.inventory_compare.missing_amount", "x" + Math.max(0, needed - owned));
+    }
+
+    private String inventoryFilterText(InventoryFilter filter) {
+        return Component.translatable(switch (filter) {
+            case ALL -> "screen.jeict.inventory_compare.filter_all";
+            case MISSING -> "screen.jeict.inventory_compare.filter_missing";
+            case PARTIAL -> "screen.jeict.inventory_compare.filter_partial";
+            case ENOUGH -> "screen.jeict.inventory_compare.filter_enough";
+        }).getString();
+    }
+
+    private boolean shouldRenderInventoryComparePanel() {
+        return (inventoryCompareOpen || inventoryComparePinned) && !inventoryCompareEntries.isEmpty();
+    }
+
+    private void ensureInventoryPanelPosition(CostStripLayout totalStrip) {
+        if (inventoryPanelX >= 0 && inventoryPanelY >= 0) {
+            return;
+        }
+        int panelWidth = inventoryPanelWidth(filteredInventoryCompareEntries());
+        inventoryPanelX = totalStrip.x() + totalStrip.width() + scale(24);
+        inventoryPanelY = totalStrip.y() + scale(COST_ROW_HEIGHT + 8);
+        inventoryPanelX = Math.max(scale(6), Math.min(inventoryPanelX, width - panelWidth - scale(6)));
+        inventoryPanelY = Math.max(scale(6), Math.min(inventoryPanelY, height - scale(80)));
+    }
+
+    private void renderInventoryComparePanel(GuiGraphics graphics, int mouseX, int mouseY) {
+        if (!shouldRenderInventoryComparePanel()) {
+            return;
+        }
+        List<InventoryCompareEntry> filteredEntries = filteredInventoryCompareEntries();
+        int panelWidth = inventoryPanelWidth(filteredEntries);
+        int panelHeight = inventoryPanelHeight(filteredEntries.size());
+        clampInventoryPanelPosition(panelWidth, panelHeight);
+        int x = inventoryPanelX;
+        int y = inventoryPanelY;
+        int padding = scale(INVENTORY_PANEL_PADDING);
+
+        graphics.pose().pushPose();
+        graphics.pose().translate(0, 0, 275);
+        int shadow = Math.max(1, scale(2));
+        graphics.fill(x + shadow, y + shadow, x + panelWidth + shadow, y + panelHeight + shadow, 0x22000000);
+        drawBox(graphics, x, y, panelWidth, panelHeight, INVENTORY_PANEL_BG, INVENTORY_PANEL_BORDER);
+
+        int controlSize = scale(INVENTORY_PANEL_CONTROL_SIZE);
+        int controlY = y + padding;
+        inventoryPinButton = new ButtonLayout(x + padding, controlY, controlSize, controlSize);
+        renderInventoryPinButton(graphics, inventoryPinButton, mouseX, mouseY);
+        inventoryCloseButton = new ButtonLayout(x + panelWidth - padding - controlSize, controlY, controlSize, controlSize);
+        renderInventoryTextButton(graphics, inventoryCloseButton, "x", mouseX, mouseY, false);
+
+        String title = Component.translatable("screen.jeict.inventory_compare.title").getString();
+        int titleX = x + (panelWidth - inventoryTextWidth(title)) / 2;
+        int titleY = y + padding + (scale(INVENTORY_PANEL_HEADER_HEIGHT) - inventoryFontHeight()) / 2;
+        drawInventoryString(graphics, title, titleX, titleY, 0xFF2F3E43, false);
+
+        int filterX = x + padding;
+        int filterY = y + padding + scale(INVENTORY_PANEL_HEADER_HEIGHT + 3);
+        filterX = renderInventoryFilterButton(graphics, InventoryFilter.ALL, filterX, filterY, mouseX, mouseY);
+        filterX = renderInventoryFilterButton(graphics, InventoryFilter.MISSING, filterX, filterY, mouseX, mouseY);
+        filterX = renderInventoryFilterButton(graphics, InventoryFilter.PARTIAL, filterX, filterY, mouseX, mouseY);
+        renderInventoryFilterButton(graphics, InventoryFilter.ENOUGH, filterX, filterY, mouseX, mouseY);
+
+        int rowY = filterY + scale(INVENTORY_PANEL_FILTER_HEIGHT + 4);
+        drawInventoryString(graphics, Component.translatable("screen.jeict.total_cost").getString() + ":", x + padding, rowY, 0xFF2F3E43, false);
+        rowY += inventoryFontHeight() + scale(3);
+        if (filteredEntries.isEmpty()) {
+            String empty = Component.translatable("screen.jeict.inventory_compare.empty").getString();
+            drawInventoryString(graphics, empty, x + padding, rowY + scale(4), 0xFF5B666B, false);
+        } else {
+            int visibleRows = Math.min(INVENTORY_PANEL_MAX_ROWS, filteredEntries.size());
+            int maxScroll = Math.max(0, filteredEntries.size() - visibleRows);
+            inventoryScrollOffset = Math.max(0, Math.min(inventoryScrollOffset, maxScroll));
+            for (int i = 0; i < visibleRows; i++) {
+                int idx = i + inventoryScrollOffset;
+                if (idx >= filteredEntries.size()) break;
+                renderInventoryCompareRow(graphics, filteredEntries.get(idx), x + padding, rowY + i * scale(INVENTORY_PANEL_ROW_HEIGHT), panelWidth - padding * 2);
+            }
+            if (maxScroll > 0) {
+                renderInventoryScrollButtons(graphics, x, rowY, panelWidth, visibleRows, mouseX, mouseY);
+            }
+        }
+        graphics.pose().popPose();
+    }
+
+    private int renderInventoryFilterButton(GuiGraphics graphics, InventoryFilter filter, int x, int y, int mouseX, int mouseY) {
+        String text = inventoryFilterText(filter);
+        int buttonWidth = inventoryFilterButtonWidth(text);
+        int height = scale(INVENTORY_PANEL_FILTER_HEIGHT);
+        FilterLayout layout = new FilterLayout(filter, x, y, buttonWidth, height);
+        inventoryFilterLayouts.add(layout);
+        boolean active = inventoryFilter == filter;
+        boolean hovered = layout.contains(mouseX, mouseY);
+        int fill = active ? 0xFFFFFFFF : hovered ? 0xF2FFFFFF : 0xE6F4F6F7;
+        int border = active ? NODE_BORDER_SELECTED : INVENTORY_PANEL_BORDER;
+        drawBox(graphics, x, y, buttonWidth, height, fill, border);
+        drawInventoryString(graphics, text, x + scale(4), y + (height - inventoryFontHeight()) / 2, 0xFF2F3E43, false);
+        return x + buttonWidth + scale(4);
+    }
+
+    private void renderInventoryCompareRow(GuiGraphics graphics, InventoryCompareEntry entry, int x, int y, int rowWidth) {
+        int height = scale(INVENTORY_PANEL_ROW_HEIGHT);
+        drawBox(graphics, x, y, rowWidth, height, 0xE6F4F6F7, inventoryBorder(entry.status()));
+        int iconX = x + scale(3);
+        int iconY = y + (height - scale(16)) / 2;
+        ItemStack stack = entry.stack().copy();
+        stack.setCount(1);
+        renderPreviewItem(graphics, stack, iconX, iconY);
+        inventoryCompareLayouts.add(new InventoryCompareLayout(stack, iconX, iconY, scale(16), scale(16)));
+
+        String needed = Component.translatable("screen.jeict.inventory_compare.needed", "x" + entry.needed()).getString();
+        String owned = Component.translatable("screen.jeict.inventory_compare.owned", "x" + entry.owned()).getString();
+        String status = inventoryCompareStatusText(entry.needed(), entry.owned(), entry.status()).getString();
+        int textY = y + (height - inventoryFontHeight()) / 2;
+        int textX = iconX + scale(22);
+        drawInventoryString(graphics, needed, textX, textY, 0xFF2F3E43, false);
+        textX += inventoryTextWidth(needed) + scale(12);
+        drawInventoryString(graphics, owned, textX, textY, 0xFF2F3E43, false);
+        textX += inventoryTextWidth(owned) + scale(12);
+        drawInventoryString(graphics, status, textX, textY, inventoryStatusColor(entry.status()), false);
+    }
+
+    private void renderInventoryPinButton(GuiGraphics graphics, ButtonLayout layout, int mouseX, int mouseY) {
+        boolean hovered = layout.contains(mouseX, mouseY);
+        int fill = inventoryComparePinned ? 0xFFFFFFFF : hovered ? 0xF2FFFFFF : 0xE6F4F6F7;
+        drawBox(graphics, layout.x(), layout.y(), layout.width(), layout.height(), fill, inventoryComparePinned ? NODE_BORDER_SELECTED : INVENTORY_PANEL_BORDER);
+        int color = inventoryComparePinned ? NODE_BORDER_SELECTED : 0xFF2F3E43;
+        int midX = layout.x() + layout.width() / 2;
+        int top = layout.y() + scale(2);
+        graphics.fill(midX - scale(3), top, midX + scale(4), top + scale(2), color);
+        graphics.fill(midX - scale(1), top + scale(2), midX + scale(2), top + scale(7), color);
+        graphics.fill(midX - scale(3), top + scale(6), midX + scale(4), top + scale(7), color);
+        graphics.fill(midX, top + scale(7), midX + scale(1), top + scale(10), color);
+    }
+
+    private void renderInventoryTextButton(GuiGraphics graphics, ButtonLayout layout, String text, int mouseX, int mouseY, boolean active) {
+        boolean hovered = layout.contains(mouseX, mouseY);
+        int fill = active || hovered ? 0xFFFFFFFF : 0xE6F4F6F7;
+        drawBox(graphics, layout.x(), layout.y(), layout.width(), layout.height(), fill, INVENTORY_PANEL_BORDER);
+        drawInventoryString(graphics, text, layout.x() + (layout.width() - inventoryTextWidth(text)) / 2, layout.y() + (layout.height() - inventoryFontHeight()) / 2, 0xFF2F3E43, false);
+    }
+
+    private void renderInventoryScrollButtons(GuiGraphics graphics, int panelX, int rowY, int panelWidth, int visibleRows, int mouseX, int mouseY) {
+        int btnSize = scale(12);
+        int rowsHeight = visibleRows * scale(INVENTORY_PANEL_ROW_HEIGHT);
+        int btnX = panelX + panelWidth - scale(INVENTORY_PANEL_PADDING) - btnSize;
+        int btnCenterY = rowY + rowsHeight / 2;
+        int upY = btnCenterY - btnSize - scale(2);
+        int downY = btnCenterY + scale(2);
+
+        boolean upHovered = contains(mouseX, mouseY, btnX, upY, btnSize, btnSize);
+        boolean downHovered = contains(mouseX, mouseY, btnX, downY, btnSize, btnSize);
+        int upFill = upHovered ? 0xFFFFFFFF : 0xE6F4F6F7;
+        int downFill = downHovered ? 0xFFFFFFFF : 0xE6F4F6F7;
+        drawBox(graphics, btnX, upY, btnSize, btnSize, upFill, INVENTORY_PANEL_BORDER);
+        drawBox(graphics, btnX, downY, btnSize, btnSize, downFill, INVENTORY_PANEL_BORDER);
+
+        int arrowColor = 0xFF2F3E43;
+        int midX = btnX + btnSize / 2;
+        int arrowW = Math.max(2, scale(5));
+        int arrowH = Math.max(2, scale(3));
+        for (int i = 0; i < arrowH; i++) {
+            graphics.fill(midX - arrowW / 2 + i, upY + btnSize / 2 - arrowH + i, midX + arrowW / 2 - i + 1, upY + btnSize / 2 - arrowH + i + 1, arrowColor);
+            graphics.fill(midX - arrowW / 2 + i, downY + btnSize / 2 + arrowH - i - 1, midX + arrowW / 2 - i + 1, downY + btnSize / 2 + arrowH - i, arrowColor);
+        }
+    }
+
+    private List<InventoryCompareEntry> filteredInventoryCompareEntries() {
+        return inventoryCompareEntries.stream()
+                .filter(this::passesInventoryFilter)
+                .toList();
+    }
+
+    private boolean passesInventoryFilter(InventoryCompareEntry entry) {
+        return switch (inventoryFilter) {
+            case ALL -> true;
+            case MISSING -> entry.status() == InventoryStatus.MISSING;
+            case PARTIAL -> entry.status() == InventoryStatus.PARTIAL;
+            case ENOUGH -> entry.status() == InventoryStatus.ENOUGH;
+        };
+    }
+
+    private int inventoryPanelWidth(List<InventoryCompareEntry> filteredEntries) {
+        int contentWidth = inventoryHeaderWidth();
+        contentWidth = Math.max(contentWidth, inventoryFiltersWidth());
+        contentWidth = Math.max(contentWidth, inventoryTextWidth(Component.translatable("screen.jeict.total_cost").getString() + ":"));
+        if (filteredEntries.isEmpty()) {
+            contentWidth = Math.max(contentWidth, inventoryTextWidth(Component.translatable("screen.jeict.inventory_compare.empty").getString()));
+        } else {
+            for (InventoryCompareEntry entry : filteredEntries) {
+                contentWidth = Math.max(contentWidth, inventoryRowContentWidth(entry));
+            }
+        }
+        int panelWidth = contentWidth + scale(INVENTORY_PANEL_PADDING * 2);
+        int maxWidth = Math.max(scale(INVENTORY_PANEL_MIN_WIDTH), width - scale(12));
+        return Math.min(maxWidth, Math.max(scale(INVENTORY_PANEL_MIN_WIDTH), panelWidth));
+    }
+
+    private int inventoryHeaderWidth() {
+        String title = Component.translatable("screen.jeict.inventory_compare.title").getString();
+        return inventoryTextWidth(title) + scale(INVENTORY_PANEL_CONTROL_SIZE * 2 + 16);
+    }
+
+    private int inventoryFiltersWidth() {
+        int total = 0;
+        for (InventoryFilter filter : InventoryFilter.values()) {
+            total += inventoryFilterButtonWidth(inventoryFilterText(filter));
+        }
+        return total + scale(4) * (InventoryFilter.values().length - 1);
+    }
+
+    private int inventoryFilterButtonWidth(String text) {
+        return inventoryTextWidth(text) + scale(8);
+    }
+
+    private int inventoryRowContentWidth(InventoryCompareEntry entry) {
+        String needed = Component.translatable("screen.jeict.inventory_compare.needed", "x" + entry.needed()).getString();
+        String owned = Component.translatable("screen.jeict.inventory_compare.owned", "x" + entry.owned()).getString();
+        String status = inventoryCompareStatusText(entry.needed(), entry.owned(), entry.status()).getString();
+        return scale(3 + 16 + 6) + inventoryTextWidth(needed) + scale(12) + inventoryTextWidth(owned) + scale(12) + inventoryTextWidth(status) + scale(5);
+    }
+
+    private int inventoryPanelHeight(int filteredEntryCount) {
+        int rows = Math.min(INVENTORY_PANEL_MAX_ROWS, Math.max(1, filteredEntryCount));
+        return scale(INVENTORY_PANEL_PADDING * 2 + INVENTORY_PANEL_HEADER_HEIGHT + 3 + INVENTORY_PANEL_FILTER_HEIGHT + 4 + 3)
+                + inventoryFontHeight()
+                + rows * scale(INVENTORY_PANEL_ROW_HEIGHT);
+    }
+
+    private void clampInventoryPanelPosition(int panelWidth, int panelHeight) {
+        if (inventoryPanelX < 0) {
+            inventoryPanelX = width - panelWidth - scale(8);
+        }
+        if (inventoryPanelY < 0) {
+            inventoryPanelY = scale(40);
+        }
+        inventoryPanelX = Math.max(scale(6), Math.min(inventoryPanelX, width - panelWidth - scale(6)));
+        inventoryPanelY = Math.max(scale(6), Math.min(inventoryPanelY, height - panelHeight - scale(6)));
+    }
+
+    private int inventoryTextWidth(String text) {
+        return (int) Math.ceil(font.width(text) * zoom * INVENTORY_TEXT_SCALE);
+    }
+
+    private int inventoryFontHeight() {
+        return Math.max(1, (int) Math.ceil(font.lineHeight * zoom * INVENTORY_TEXT_SCALE));
+    }
+
+    private void drawInventoryString(GuiGraphics graphics, String text, int x, int y, int color, boolean shadow) {
+        graphics.pose().pushPose();
+        graphics.pose().translate(x, y, 0);
+        graphics.pose().scale((float) (zoom * INVENTORY_TEXT_SCALE), (float) (zoom * INVENTORY_TEXT_SCALE), 1);
+        graphics.drawString(font, text, 0, 0, color, shadow);
+        graphics.pose().popPose();
     }
 
     private int scaledTextWidth(String text) {
@@ -522,7 +976,7 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
     }
 
     private int effectiveBatches(TreeNode node, double multiplier) {
-        if (node == tree.root()) {
+        if (node == tree.root() || node.batches() != node.baseBatches()) {
             return node.batches();
         }
         int required = effectiveAmount(node, multiplier);
@@ -559,6 +1013,25 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
     }
 
     private void renderNodeTooltip(GuiGraphics graphics, int mouseX, int mouseY) {
+        for (InventoryCompareLayout layout : inventoryCompareLayouts) {
+            if (layout.contains(mouseX, mouseY)) {
+                List<Component> lines = layout.stack().getTooltipLines(minecraft.player, TooltipFlag.Default.NORMAL);
+                graphics.renderComponentTooltip(font, lines, mouseX, mouseY);
+                return;
+            }
+        }
+        if (inventoryCompareButton != null && inventoryCompareButton.contains(mouseX, mouseY)) {
+            graphics.renderTooltip(font, Component.translatable("screen.jeict.inventory_compare.open"), mouseX, mouseY);
+            return;
+        }
+        if (inventoryPinButton != null && inventoryPinButton.contains(mouseX, mouseY)) {
+            graphics.renderTooltip(font, Component.translatable(inventoryComparePinned ? "screen.jeict.inventory_compare.unpin" : "screen.jeict.inventory_compare.pin"), mouseX, mouseY);
+            return;
+        }
+        if (inventoryCloseButton != null && inventoryCloseButton.contains(mouseX, mouseY)) {
+            graphics.renderTooltip(font, Component.translatable("screen.jeict.inventory_compare.close"), mouseX, mouseY);
+            return;
+        }
         Optional<ItemStack> hoveredAlternative = alternativeAt(mouseX, mouseY);
         if (hoveredAlternative.isPresent()) {
             List<Component> lines = hoveredAlternative.get().getTooltipLines(minecraft.player, TooltipFlag.Default.NORMAL);
@@ -567,7 +1040,12 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         }
         for (CostLayout layout : costLayouts) {
             if (layout.contains(mouseX, mouseY)) {
-                List<Component> lines = layout.stack().getTooltipLines(minecraft.player, TooltipFlag.Default.NORMAL);
+                List<Component> lines = new ArrayList<>(layout.stack().getTooltipLines(minecraft.player, TooltipFlag.Default.NORMAL));
+                if (layout.inventoryAware()) {
+                    lines.add(Component.translatable("screen.jeict.inventory_compare.needed", "x" + layout.needed()).withStyle(ChatFormatting.GRAY));
+                    lines.add(Component.translatable("screen.jeict.inventory_compare.owned", "x" + layout.owned()).withStyle(ChatFormatting.GRAY));
+                    lines.add(inventoryCompareStatusText(layout.needed(), layout.owned(), layout.status()).copy().withStyle(inventoryStatusFormatting(layout.status())));
+                }
                 graphics.renderComponentTooltip(font, lines, mouseX, mouseY);
                 return;
             }
@@ -854,14 +1332,67 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         return Math.max(1, scale(1));
     }
 
+    private boolean clickInventoryComparePanel(int mouseX, int mouseY) {
+        if (!shouldRenderInventoryComparePanel()) {
+            return false;
+        }
+        if (inventoryCloseButton != null && inventoryCloseButton.contains(mouseX, mouseY)) {
+            inventoryCompareOpen = false;
+            inventoryComparePinned = false;
+            inventoryPanelDragging = false;
+            return true;
+        }
+        if (inventoryPinButton != null && inventoryPinButton.contains(mouseX, mouseY)) {
+            inventoryComparePinned = !inventoryComparePinned;
+            inventoryCompareOpen = true;
+            return true;
+        }
+        for (FilterLayout layout : inventoryFilterLayouts) {
+            if (layout.contains(mouseX, mouseY)) {
+                inventoryFilter = layout.filter();
+                inventoryScrollOffset = 0;
+                return true;
+            }
+        }
+        List<InventoryCompareEntry> filteredEntries = filteredInventoryCompareEntries();
+        int panelWidth = inventoryPanelWidth(filteredEntries);
+        int panelHeight = inventoryPanelHeight(filteredEntries.size());
+        if (inventoryPanelX >= 0 && inventoryPanelY >= 0 && contains(mouseX, mouseY, inventoryPanelX, inventoryPanelY, panelWidth, panelHeight)) {
+            inventoryPanelDragging = true;
+            inventoryPanelDragOffsetX = mouseX - inventoryPanelX;
+            inventoryPanelDragOffsetY = mouseY - inventoryPanelY;
+            return true;
+        }
+        if (!inventoryComparePinned) {
+            inventoryCompareOpen = false;
+            inventoryPanelDragging = false;
+            return true;
+        }
+        return false;
+    }
+
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (button == 0 && dropdownNode != null && clickAlternativeDropdown((int) mouseX, (int) mouseY)) {
+        int mx = (int) mouseX;
+        int my = (int) mouseY;
+        if (button == 0 && clickInventoryComparePanel(mx, my)) {
+            return true;
+        }
+        if (button == 0 && inventoryCompareButton != null && inventoryCompareButton.contains(mx, my)) {
+            dropdownNode = null;
+            if (inventoryComparePinned) {
+                inventoryCompareOpen = true;
+            } else {
+                inventoryCompareOpen = !inventoryCompareOpen;
+            }
+            return true;
+        }
+        if (button == 0 && dropdownNode != null && clickAlternativeDropdown(mx, my)) {
             return true;
         }
         if (button == 0) {
             for (CostLayout layout : costLayouts) {
-                if (layout.contains((int) mouseX, (int) mouseY)) {
+                if (layout.contains(mx, my)) {
                     dropdownNode = null;
                     selected = findOrCreateSelection(layout.stack());
                     batchInput = "";
@@ -949,6 +1480,13 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
                 node.expanded(expanded);
             }
         }
+        // 路径 6：折叠/展开会改变子树可见性，需要重建 layout。
+        markLayoutDirty();
+    }
+
+    /** 路径 6：把布局判脏集中到一个方法，避免散落各处的赋值被漏掉。 */
+    private void markLayoutDirty() {
+        layoutDirty = true;
     }
 
     private boolean contains(int mouseX, int mouseY, int x, int y, int width, int height) {
@@ -976,6 +1514,15 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
 
     @Override
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
+        if (button == 0 && inventoryPanelDragging) {
+            List<InventoryCompareEntry> filteredEntries = filteredInventoryCompareEntries();
+            int panelWidth = inventoryPanelWidth(filteredEntries);
+            int panelHeight = inventoryPanelHeight(filteredEntries.size());
+            inventoryPanelX = (int) mouseX - inventoryPanelDragOffsetX;
+            inventoryPanelY = (int) mouseY - inventoryPanelDragOffsetY;
+            clampInventoryPanelPosition(panelWidth, panelHeight);
+            return true;
+        }
         if (button == 1 && dragging) {
             panX += (int) mouseX - lastMouseX;
             panY += (int) mouseY - lastMouseY;
@@ -988,6 +1535,10 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
 
     @Override
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        if (button == 0 && inventoryPanelDragging) {
+            inventoryPanelDragging = false;
+            return true;
+        }
         if (button == 1) {
             dragging = false;
             return true;
@@ -1004,12 +1555,27 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
             panY = (int) (mouseY - (mouseY - panY) * (zoom / oldZoom));
             return true;
         }
+        if (shouldRenderInventoryComparePanel()) {
+            List<InventoryCompareEntry> filteredEntries = filteredInventoryCompareEntries();
+            int visibleRows = Math.min(INVENTORY_PANEL_MAX_ROWS, filteredEntries.size());
+            int maxScroll = Math.max(0, filteredEntries.size() - visibleRows);
+            int mx = (int) mouseX;
+            int my = (int) mouseY;
+            int panelWidth = inventoryPanelWidth(filteredEntries);
+            int panelHeight = inventoryPanelHeight(filteredEntries.size());
+            if (mx >= inventoryPanelX && mx < inventoryPanelX + panelWidth
+                    && my >= inventoryPanelY && my < inventoryPanelY + panelHeight) {
+                inventoryScrollOffset = Math.max(0, Math.min(maxScroll, inventoryScrollOffset + (delta > 0 ? -1 : 1)));
+                return true;
+            }
+        }
         for (LayoutNode layout : layoutNodes) {
             if (layout.contains((int) mouseX, (int) mouseY) && canEditBatches(layout.node())) {
                 int step = hasShiftDown() ? 10 : 1;
                 layout.node().batches(layout.node().batches() + (delta > 0 ? step : -step));
                 batchInput = "";
                 selected = layout.node();
+                markLayoutDirty();
                 return true;
             }
         }
@@ -1058,7 +1624,7 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
     }
 
     private boolean canEditBatches(TreeNode node) {
-        return node == tree.root() && node.recipe() != null;
+        return node.recipe() != null;
     }
 
     private void openRecipeInJei(TreeNode node) {
@@ -1186,6 +1752,8 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         batchInput = "";
         recipeIconCache.clear();
         recipePreviewCache.clear();
+        // 路径 6：替代品切换会改变 children 与 displayStack，需要重建 layout。
+        markLayoutDirty();
     }
 
     private void rebuildSelectedNode(TreeNode node) {
@@ -1206,6 +1774,8 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
             node.cycle(rebuilt.cycle());
         });
         node.alternatives(alternatives);
+        // 路径 6：children 重新挂载，必须重建 layout。
+        markLayoutDirty();
     }
 
     private void applyRecipeSelection(TreeNode node, Object recipe, ItemStack output, InputData inputData) {
@@ -1234,6 +1804,8 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
             child.alternatives(inputData.alternativesByKey().getOrDefault(entry.getKey(), List.of()));
             node.children().add(child);
         }
+        // 路径 6：从 JEI 切了配方，子节点全替换，需要重建 layout。
+        markLayoutDirty();
     }
 
     private List<TreeNode> matchingNodes(IngredientKey key) {
@@ -1330,6 +1902,22 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         return Optional.of(new JeiRecipeMatch(category, castRecipe));
     }
 
+    /**
+     * 路径 8：构造一个带 size 上限的 LRU 缓存，避免 IRecipeLayoutDrawable / IDrawable 等
+     * 持有 GL 资源的对象在大树上无界累积导致显存占用。
+     * <p>访问顺序为 true 的 LinkedHashMap 在 put / get 时都会触发 reorder，
+     * {@code removeEldestEntry} 返回 true 即淘汰最旧条目。
+     */
+    private static <K, V> Map<K, V> newLruCache(int maxSize) {
+        return new LinkedHashMap<K, V>(16, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+                return size() > maxSize;
+            }
+        };
+    }
+
+
     public static class ContainerTransfer extends AbstractContainerMenu {
         private RecipeTreeScreen screen;
 
@@ -1356,22 +1944,6 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         }
     }
 
-    private record LayoutNode(TreeNode node, int x, int y, int width, int height, int itemCenterX, int itemSize) {
-        int centerX() {
-            return x + width / 2;
-        }
-
-        boolean contains(int mouseX, int mouseY) {
-            return mouseX >= x && mouseX < x + width && mouseY >= y && mouseY < y + height;
-        }
-
-        boolean itemContains(int mouseX, int mouseY) {
-            int left = itemCenterX - itemSize / 2;
-            int top = y + (height - itemSize) / 2;
-            return mouseX >= left && mouseX < left + itemSize && mouseY >= top && mouseY < top + itemSize;
-        }
-    }
-
     private record CostEntry(ItemStack stack, int count) {
         static CostEntry merge(CostEntry entry, ItemStack stack, int count) {
             if (entry == null) {
@@ -1381,10 +1953,47 @@ public class RecipeTreeScreen extends AbstractContainerScreen<RecipeTreeScreen.C
         }
     }
 
-    private record CostDisplayEntry(ItemStack stack, int count, int border) {
+    private enum InventoryStatus {
+        ENOUGH,
+        PARTIAL,
+        MISSING
     }
 
-    private record CostLayout(ItemStack stack, int x, int y, int width, int height) {
+    private enum InventoryFilter {
+        ALL,
+        MISSING,
+        PARTIAL,
+        ENOUGH
+    }
+
+    private record CostDisplayEntry(IngredientKey key, ItemStack stack, int count, int border, int owned, InventoryStatus status, boolean inventoryAware) {
+    }
+
+    private record CostStripLayout(int x, int y, int width, int height) {
+    }
+
+    private record CostLayout(IngredientKey key, ItemStack stack, int needed, int owned, InventoryStatus status, boolean inventoryAware, int x, int y, int width, int height) {
+        boolean contains(int mouseX, int mouseY) {
+            return mouseX >= x && mouseX < x + width && mouseY >= y && mouseY < y + height;
+        }
+    }
+
+    private record InventoryCompareEntry(IngredientKey key, ItemStack stack, int needed, int owned, InventoryStatus status) {
+    }
+
+    private record InventoryCompareLayout(ItemStack stack, int x, int y, int width, int height) {
+        boolean contains(int mouseX, int mouseY) {
+            return mouseX >= x && mouseX < x + width && mouseY >= y && mouseY < y + height;
+        }
+    }
+
+    private record ButtonLayout(int x, int y, int width, int height) {
+        boolean contains(int mouseX, int mouseY) {
+            return mouseX >= x && mouseX < x + width && mouseY >= y && mouseY < y + height;
+        }
+    }
+
+    private record FilterLayout(InventoryFilter filter, int x, int y, int width, int height) {
         boolean contains(int mouseX, int mouseY) {
             return mouseX >= x && mouseX < x + width && mouseY >= y && mouseY < y + height;
         }

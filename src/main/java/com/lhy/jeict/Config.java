@@ -7,29 +7,16 @@ import net.minecraftforge.fml.event.config.ModConfigEvent;
 
 @Mod.EventBusSubscriber(modid = Jeict.MODID, bus = Mod.EventBusSubscriber.Bus.MOD)
 public class Config {
-    private static final ForgeConfigSpec.Builder BUILDER = new ForgeConfigSpec.Builder();
+    public static final ForgeConfigSpec SPEC = com.lhy.jeict.config.RecipeTreeConfig.SPEC;
 
-    private static final ForgeConfigSpec.IntValue MAX_TREE_DEPTH = BUILDER
-            .defineInRange("maxTreeDepth", 8, 1, 32);
-    private static final ForgeConfigSpec.IntValue MAX_TREE_NODES = BUILDER
-            .defineInRange("maxTreeNodes", 256, 16, 4096);
-    private static final ForgeConfigSpec.IntValue MAX_CANDIDATES_PER_INGREDIENT = BUILDER
-            .defineInRange("maxCandidatesPerIngredient", 12, 1, 128);
-    private static final ForgeConfigSpec.BooleanValue SHOW_ONLY_CRAFTABLE_CANDIDATES = BUILDER
-            .define("showOnlyCraftableCandidates", false);
-
-    public static final ForgeConfigSpec SPEC = BUILDER.build();
-
-    public static int maxTreeDepth;
-    public static int maxTreeNodes;
-    public static int maxCandidatesPerIngredient;
-    public static boolean showOnlyCraftableCandidates;
+    public static int maxTreeDepth() { return com.lhy.jeict.config.RecipeTreeConfig.maxTreeDepth(); }
+    public static int maxTreeNodes() { return com.lhy.jeict.config.RecipeTreeConfig.maxTreeNodes(); }
+    public static int maxCandidatesPerIngredient() { return com.lhy.jeict.config.RecipeTreeConfig.maxCandidatesPerIngredient(); }
+    public static boolean showOnlyCraftableCandidates() { return com.lhy.jeict.config.RecipeTreeConfig.showOnlyCraftableCandidates(); }
 
     @SubscribeEvent
     static void onLoad(ModConfigEvent event) {
-        maxTreeDepth = MAX_TREE_DEPTH.get();
-        maxTreeNodes = MAX_TREE_NODES.get();
-        maxCandidatesPerIngredient = MAX_CANDIDATES_PER_INGREDIENT.get();
-        showOnlyCraftableCandidates = SHOW_ONLY_CRAFTABLE_CANDIDATES.get();
+        // 配置变更时清理缓存——下游直接调 getter 获取最新值，无需静态缓存
+        com.lhy.jeict.tree.RecipeGraphCache.clear();
     }
 }

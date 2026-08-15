@@ -13,6 +13,6 @@ public final class ClientModEvents {
 
     @SubscribeEvent
     public static void registerKeyMappings(RegisterKeyMappingsEvent event) {
-        ClientEvents.registerKeyMappings(event);
+        com.lhy.jeict.config.RecipeTreeKeyMappings.register(event);
     }
 }

@@ -16,6 +16,7 @@ public final class TreeNode {
     private boolean expanded = true;
     private boolean cycle;
     private boolean limited;
+    private boolean noRecipe;
     private int batches = 1;
     private int baseBatches = 1;
     private int outputPerBatch = 1;
@@ -114,6 +115,14 @@ public final class TreeNode {
 
     public void limited(boolean limited) {
         this.limited = limited;
+    }
+
+    public boolean noRecipe() {
+        return noRecipe;
+    }
+
+    public void noRecipe(boolean noRecipe) {
+        this.noRecipe = noRecipe;
     }
 
     public int batches() {
