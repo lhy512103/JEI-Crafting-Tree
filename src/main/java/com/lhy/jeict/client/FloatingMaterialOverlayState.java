@@ -57,7 +57,8 @@ public final class FloatingMaterialOverlayState {
     private static final int ICON_SIZE = 16;
     private static final int ICON_GAP = 2;
     private static final int MATERIAL_CELL_SIZE = ICON_SIZE + ICON_GAP;
-    private static final int INPUTS_PER_ROW = 8;
+    private static final int MAX_INPUTS_SINGLE_ROW = 6;
+    private static final int INPUTS_PER_ROW_WRAPPED = 8;
     private static final int ARROW_WIDTH = 12;
     private static final int OUTPUT_X = GROUP_WIDTH - GROUP_PADDING - ICON_SIZE;
     private static final int BADGE_SIZE = 8;
@@ -198,7 +199,7 @@ public final class FloatingMaterialOverlayState {
                         stateColor(group.state(), theme));
                 for (int entryIndex = 0; entryIndex < group.entries().size(); entryIndex++) {
                     drawEntry(graphics, font, group.entries().get(entryIndex),
-                            groupX + inputX(entryIndex), groupY + inputY(entryIndex));
+                            groupX + inputX(group, entryIndex), groupY + inputY(group, entryIndex));
                 }
                 DisplayEntry output = group.output();
                 if (output != null) {
@@ -550,10 +551,15 @@ public final class FloatingMaterialOverlayState {
 
         Map<Integer, ItemStack> planned = new LinkedHashMap<>();
         boolean shortOnSpace = false;
-        for (DisplayEntry entry : missingRaw()) {
+        Map<String, Long> byMaterial = missingByMaterial();
+        Map<String, DisplayEntry> firstByMaterial = new LinkedHashMap<>();
+        for (DisplayEntry entry : missingRaw()) firstByMaterial.putIfAbsent(entry.key(), entry);
+        for (Map.Entry<String, Long> item : byMaterial.entrySet()) {
+            DisplayEntry entry = firstByMaterial.get(item.getKey());
+            if (entry == null) continue;
             ItemStack template = itemStack(entry.source());
             if (template.isEmpty()) continue;
-            long remaining = entry.remaining();
+            long remaining = item.getValue();
             for (var tier : tiers) {
                 remaining = planRefill(tier, template, remaining, planned, true);
                 remaining = planRefill(tier, template, remaining, planned, false);
@@ -641,12 +647,14 @@ public final class FloatingMaterialOverlayState {
         return false;
     }
 
-    private static int inputX(int index) {
-        return GROUP_PADDING + index % INPUTS_PER_ROW * MATERIAL_CELL_SIZE;
+    private static int inputX(DisplayGroup group, int index) {
+        int perRow = group.entries().size() <= MAX_INPUTS_SINGLE_ROW ? group.entries().size() : INPUTS_PER_ROW_WRAPPED;
+        return GROUP_PADDING + index % perRow * MATERIAL_CELL_SIZE;
     }
 
-    private static int inputY(int index) {
-        return GROUP_PADDING + index / INPUTS_PER_ROW * MATERIAL_CELL_SIZE;
+    private static int inputY(DisplayGroup group, int index) {
+        int perRow = group.entries().size() <= MAX_INPUTS_SINGLE_ROW ? group.entries().size() : INPUTS_PER_ROW_WRAPPED;
+        return GROUP_PADDING + index / perRow * MATERIAL_CELL_SIZE;
     }
 
     private static int outputY(DisplayGroup group) {
@@ -662,8 +670,8 @@ public final class FloatingMaterialOverlayState {
 
     private static @Nullable DisplayEntry entryAt(DisplayGroup group, int gx, int gy) {
         for (int i = 0; i < group.entries().size(); i++) {
-            int ix = inputX(i);
-            int iy = inputY(i);
+            int ix = inputX(group, i);
+            int iy = inputY(group, i);
             if (gx >= ix && gx < ix + ICON_SIZE && gy >= iy && gy < iy + ICON_SIZE) return group.entries().get(i);
         }
         if (group.output() != null) {
@@ -1036,7 +1044,10 @@ public final class FloatingMaterialOverlayState {
     }
 
     private static int groupHeight(int inputCount) {
-        int rows = Math.max(1, (inputCount + INPUTS_PER_ROW - 1) / INPUTS_PER_ROW);
+        if (inputCount <= MAX_INPUTS_SINGLE_ROW) {
+            return GROUP_PADDING * 2 + ICON_SIZE;
+        }
+        int rows = (inputCount + INPUTS_PER_ROW_WRAPPED - 1) / INPUTS_PER_ROW_WRAPPED;
         return GROUP_PADDING * 2 + rows * MATERIAL_CELL_SIZE - ICON_GAP;
     }
 
