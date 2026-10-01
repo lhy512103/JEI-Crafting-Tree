@@ -110,6 +110,9 @@ public final class RecipeTreeAutoCraftService {
             return new Result(Outcome.COMPLETED, context.title());
         }
         List<RecipeTreeRecipeViewModel> candidates = planned.recipes();
+        if (candidates.isEmpty()) {
+            return new Result(Outcome.MISSING_ITEMS, null);
+        }
         boolean sawHandler = false;
         boolean sawMissingItems = false;
         boolean sawFailure = false;

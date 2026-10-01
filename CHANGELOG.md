@@ -2,6 +2,28 @@
 
 [v0.0.4](#v004) | [v0.0.3](#v003) | [v0.0.2](#v002) | [v0.0.1](#v001--2026-07-23)
 
+## Unreleased
+
+### English
+
+1. Optimized: auto-crafting stops with a clear reason instead of retrying silently.
+2. Added: Shift+click on Craft crafts a single batch.
+3. Added: floating panel status line, red/yellow shortage tint and missing-material tooltip.
+4. Optimized: creative Refill fills everything in one click and supports the player inventory.
+5. Fixed: creative Refill ignoring stack upgrades of Sophisticated containers.
+6. Fixed: missing materials reported as "unsupported screen".
+7. Added: API `StopReason` values `MISSING_ITEMS`, `NO_HANDLER`, `NO_CONTAINER`, `REJECTED`.
+
+### 中文
+
+1. 优化：自动合成失败时明确停止并提示原因，不再无声重试。
+2. 新增：合成按钮支持 Shift+点击只合成一批。
+3. 新增：悬浮面板状态栏、缺料红/黄标记及缺料清单提示。
+4. 优化：创造补料一次补完，并支持补充到玩家物品栏。
+5. 修复：创造补料不识别精妙存储/背包的堆叠升级。
+6. 修复：材料不足被误报为“界面不支持”。
+7. 新增：API `StopReason` 增加 `MISSING_ITEMS`、`NO_HANDLER`、`NO_CONTAINER`、`REJECTED`。
+
 ## v0.0.4
 
 ### English
