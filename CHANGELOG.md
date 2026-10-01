@@ -13,6 +13,8 @@
 5. Fixed: creative Refill ignoring stack upgrades of Sophisticated containers.
 6. Fixed: missing materials reported as "unsupported screen".
 7. Added: API `StopReason` values `MISSING_ITEMS`, `NO_HANDLER`, `NO_CONTAINER`, `REJECTED`.
+8. Optimized: floating material panel now shows the whole crafting chain step by step (inputs → product) with per-step progress colors.
+9. Optimized: machine shown as a corner badge on the product icon instead of its own slot.
 
 ### 中文
 
@@ -23,6 +25,8 @@
 5. 修复：创造补料不识别精妙存储/背包的堆叠升级。
 6. 修复：材料不足被误报为“界面不支持”。
 7. 新增：API `StopReason` 增加 `MISSING_ITEMS`、`NO_HANDLER`、`NO_CONTAINER`、`REJECTED`。
+8. 优化：材料需求面板改为合成链形式，按步骤完整显示“材料 → 产物”，并用颜色标出每一步的进度。
+9. 优化：机器图标改为产物图标右上角的角标，不再单独占用一个槽位。
 
 ## v0.0.4
 
