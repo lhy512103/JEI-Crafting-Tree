@@ -28,6 +28,8 @@ import net.minecraft.world.item.ItemStack;
  */
 public final class RecipeTreeAutoCraftSession {
     private static final int SYNC_TIMEOUT_TICKS = 200;
+    /** Consecutive failed fill attempts (5 ticks apart) tolerated before the session gives up and says why. */
+    private static final int MAX_CONSECUTIVE_FAILURES = 6;
 
     private static @Nullable Session session;
     private static long nextRequestId;
@@ -42,13 +44,24 @@ public final class RecipeTreeAutoCraftSession {
         NO_OUTPUT,
         NO_SPACE,
         TRANSFER_FAILED,
-        SYNC_TIMEOUT
+        SYNC_TIMEOUT,
+        OPERATION_LIMIT,
+        MISSING_ITEMS,
+        NO_HANDLER,
+        NO_CONTAINER,
+        REJECTED
     }
 
-    public record Status(boolean running, @Nullable StopReason stopReason, @Nullable Component recipeTitle) {
+    public record Status(boolean running, @Nullable StopReason stopReason, @Nullable Component recipeTitle,
+            int operations, long stoppedAtMillis) {
     }
 
     public static boolean toggle(@Nullable RecipeTreeRootContext context) {
+        return toggle(context, Integer.MAX_VALUE);
+    }
+
+    /** Starts a session limited to {@code maxOperations} completed crafts, or stops the running one. */
+    public static boolean toggle(@Nullable RecipeTreeRootContext context, int maxOperations) {
         if (session != null) {
             stop(StopReason.CANCELLED);
             return false;
@@ -58,8 +71,31 @@ public final class RecipeTreeAutoCraftSession {
         if (context == null || player == null || minecraft.gameMode == null) {
             return false;
         }
-        session = new Session(context, player.containerMenu.containerId);
+        session = new Session(context, player.containerMenu.containerId, Math.max(1, maxOperations));
+        lastStopReason = null;
         return true;
+    }
+
+    public static Component stopMessage(StopReason reason) {
+        return Component.translatable(switch (reason) {
+            case MISSING_ITEMS -> "message.jeict.auto_craft_missing_items";
+            case NO_HANDLER -> "message.jeict.auto_craft_no_handler";
+            case NO_CONTAINER -> "message.jeict.auto_craft_no_container";
+            case REJECTED -> "message.jeict.auto_craft_rejected";
+            case TRANSFER_FAILED -> "message.jeict.auto_craft_failed";
+            case CANCELLED -> "message.jeict.auto_craft_cancelled";
+            case COMPLETED -> "message.jeict.auto_craft_completed";
+            case OPERATION_LIMIT -> "message.jeict.auto_craft_batch_done";
+            case MENU_CHANGED -> "message.jeict.auto_craft_menu_changed";
+            case NO_OUTPUT -> "message.jeict.auto_craft_no_output";
+            case NO_SPACE -> "message.jeict.auto_craft_no_space";
+            case SYNC_TIMEOUT -> "message.jeict.auto_craft_sync_timeout";
+        });
+    }
+
+    /** Whether a finished session ended well, for colouring its status. */
+    public static boolean isSuccess(StopReason reason) {
+        return reason == StopReason.COMPLETED || reason == StopReason.OPERATION_LIMIT;
     }
 
     public static void tick() {
@@ -93,8 +129,8 @@ public final class RecipeTreeAutoCraftSession {
 
     public static Status status() {
         Session current = session;
-        return current == null ? new Status(false, lastStopReason, lastRecipeTitle)
-                : new Status(true, null, current.recipeTitle);
+        return current == null ? new Status(false, lastStopReason, lastRecipeTitle, 0, lastStopMillis)
+                : new Status(true, null, current.recipeTitle, current.operations, 0L);
     }
 
     public static void handleBatchResult(BatchCraftResultPayload result) {
@@ -127,6 +163,7 @@ public final class RecipeTreeAutoCraftSession {
 
     private static @Nullable StopReason lastStopReason;
     private static @Nullable Component lastRecipeTitle;
+    private static long lastStopMillis;
 
     private static void fill(Session current, Player player) {
         RecipeTreeAutoCraftService.Result result = RecipeTreeAutoCraftService.craftFirstAvailable(current.context);
@@ -142,12 +179,27 @@ public final class RecipeTreeAutoCraftSession {
         if (result.outcome() != RecipeTreeAutoCraftService.Outcome.TRANSFERRED) {
             AutoCraftDebug.log("fill outcome={} title={}", result.outcome(),
                     result.recipeTitle() == null ? "" : result.recipeTitle().getString());
+            if (++current.failures >= MAX_CONSECUTIVE_FAILURES) {
+                stop(failureReason(result.outcome()));
+                return;
+            }
             current.phase = Phase.RETRY;
             current.waitTicks = 0;
             return;
         }
+        current.failures = 0;
         current.phase = Phase.WAIT_OUTPUT;
         current.waitTicks = 0;
+    }
+
+    private static StopReason failureReason(RecipeTreeAutoCraftService.Outcome outcome) {
+        return switch (outcome) {
+            case MISSING_ITEMS -> StopReason.MISSING_ITEMS;
+            case NO_HANDLER -> StopReason.NO_HANDLER;
+            case NO_CONTAINER -> StopReason.NO_CONTAINER;
+            case REJECTED -> StopReason.REJECTED;
+            default -> StopReason.TRANSFER_FAILED;
+        };
     }
 
     private static void retry(Session current, Player player) {
@@ -200,6 +252,12 @@ public final class RecipeTreeAutoCraftSession {
                     : Phase.WAIT_STORE;
         } else {
             quickMove(player, current.outputSlot);
+            current.operations++;
+            if (current.operations >= current.maxOperations) {
+                ClientInventorySnapshotCache.invalidate();
+                stop(StopReason.OPERATION_LIMIT);
+                return;
+            }
             current.phase = Phase.RETRY;
         }
         current.waitTicks = 0;
@@ -285,6 +343,10 @@ public final class RecipeTreeAutoCraftSession {
 
     private static void nextOperation(Session current) {
         current.operations++;
+        if (current.operations >= current.maxOperations) {
+            stop(StopReason.OPERATION_LIMIT);
+            return;
+        }
         current.phase = Phase.FILL;
         current.waitTicks = 0;
     }
@@ -350,8 +412,13 @@ public final class RecipeTreeAutoCraftSession {
     private static void stop(StopReason reason) {
         Session current = session;
         lastStopReason = reason;
+        lastStopMillis = System.currentTimeMillis();
         lastRecipeTitle = current == null ? lastRecipeTitle : current.recipeTitle;
         session = null;
+        Player player = Minecraft.getInstance().player;
+        if (current != null && player != null && reason != StopReason.CANCELLED) {
+            player.displayClientMessage(stopMessage(reason), true);
+        }
     }
 
     private enum Phase {
@@ -369,9 +436,11 @@ public final class RecipeTreeAutoCraftSession {
     private static final class Session {
         private final RecipeTreeRootContext context;
         private final int containerId;
+        private final int maxOperations;
         private Phase phase = Phase.FILL;
         private int waitTicks;
         private int retryDelayTicks;
+        private int failures;
         private int operations;
         private int outputSlot = -1;
         private long pendingRequestId;
@@ -381,9 +450,10 @@ public final class RecipeTreeAutoCraftSession {
         private @Nullable CraftingResultInteractions.Resolved specializedOutput;
         private ItemStack expectedOutput = ItemStack.EMPTY;
 
-        private Session(RecipeTreeRootContext context, int containerId) {
+        private Session(RecipeTreeRootContext context, int containerId, int maxOperations) {
             this.context = context;
             this.containerId = containerId;
+            this.maxOperations = maxOperations;
         }
     }
 }
