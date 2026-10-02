@@ -12,7 +12,7 @@ import appeng.menu.me.common.GridInventoryEntry;
 import appeng.menu.me.common.MEStorageMenu;
 
 import com.lhy.jeict.api.InventoryAmount;
-import com.lhy.jeict.client.ClientMenuInventoryProvider;
+import com.lhy.jeict.api.MenuInventorySource;
 import com.lhy.jeict.client.ClientMenuInventoryProviders;
 import com.lhy.jeict.planning.MaterialKey;
 import com.lhy.jeict.planning.RecipePlanSolver;
@@ -26,7 +26,7 @@ import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 
 /** Versioned client-side view of the stock AE2 already synchronizes to an open ME terminal. */
-public final class Ae2ClientMenuInventoryProvider implements ClientMenuInventoryProvider {
+public final class Ae2ClientMenuInventoryProvider implements MenuInventorySource {
     private static final long REFRESH_INTERVAL_TICKS = 5L;
     private static final Ae2ClientMenuInventoryProvider INSTANCE = new Ae2ClientMenuInventoryProvider();
 

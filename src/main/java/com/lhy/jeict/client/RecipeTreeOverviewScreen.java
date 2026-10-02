@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.NavigableMap;
@@ -143,7 +144,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private final List<TopMaterialBounds> surplusMaterialBounds = new ArrayList<>();
     private final List<GenericTopMaterialBounds> genericTopMaterialBounds = new ArrayList<>();
     private final List<AlternativeButtonBounds> alternativeButtonBounds = new ArrayList<>();
-    private final List<AlternativeOptionBounds> alternativeOptionBounds = new ArrayList<>();
     private final List<LayerMaterialBounds> layerMaterialBounds = new ArrayList<>();
     /** Only the currently visible 9 input and 3 output slots receive hit boxes. */
     private final List<PatternDraftSlotBounds> inspectorPatternSlotBounds = new ArrayList<>(12);
@@ -239,8 +239,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private double visibleLogicalMaxY;
     private boolean initializedPan;
     private boolean initializedWorkspaceView;
-    private int alternativeScroll;
-    private int toolbarLeft;
+    private final AlternativePickerPanel alternativePicker = new AlternativePickerPanel();
     private int headerTitleLeft = 222;
     private int headerTitleRight = 222;
     private boolean settingsOpen;
@@ -262,7 +261,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private final Set<String> manuallyCollapsedSignatures = new HashSet<>();
     private final Map<String, Optional<RecipeTreeRecipeViewModel>> autoExpandUniqueCandidateCache = new HashMap<>();
     private @Nullable PendingJeiSelection pendingJeiSelection;
-    private @Nullable PendingAlternativeSelection pendingAlternativeSelection;
     private int lastRenderedNodeCount;
     private int lastRenderedEdgeCount;
     private int lastRenderedLayerCount;
@@ -689,9 +687,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         int applied = 0;
         for (List<UnresolvedInputSlot> group : grouped.values()) {
             if (group.isEmpty()) {
-                continue;
-            }
-            if (group.stream().anyMatch(slot -> slot.input().hasAlternativeChoices())) {
                 continue;
             }
             MergedLeaf leaf = mergedLeafFromUnresolvedGroup(group);
@@ -1666,16 +1661,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     private record LayerRow(int depth, List<LayerMaterial> materials) {
-        private int width() {
-            int total = 0;
-            for (int i = 0; i < materials.size(); i++) {
-                if (i > 0) {
-                    total += 4;
-                }
-                total += materials.get(i).width();
-            }
-            return Math.max(24, total);
-        }
     }
 
     private record LayerMaterial(@Nullable ITypedIngredient<?> ingredient, String label, String amountLabel, int width,
@@ -2049,7 +2034,9 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         lastRenderedLayerMaterialCount = 0;
         lastRenderedTopMaterialCount = 0;
         RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
-        graphics.drawManaged(() -> renderWorkspaceBackdrop(graphics, theme));
+        graphics.flush();
+        renderWorkspaceBackdrop(graphics, theme);
+        graphics.flush();
 
         int footerHeight = currentFooterHeight();
         boolean clippedWorkspace = this.width > 12 && this.height > HEADER_HEIGHT + footerHeight + 2;
@@ -2058,9 +2045,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             graphics.enableScissor(canvasLeft() + 2, HEADER_HEIGHT + 2, canvasRight() - 2, this.height - footerHeight - 2);
         }
         if (clippedWorkspace && RecipeTreeTheme.isClassicStyle()) {
-            graphics.drawManaged(() -> RecipeTreeTheme.drawBlueprintGrid(graphics,
+            graphics.flush();
+            RecipeTreeTheme.drawBlueprintGrid(graphics,
                     canvasLeft() + 2, HEADER_HEIGHT + 2, canvasRight() - 2, this.height - footerHeight - 2,
-                    panX, panY, zoom));
+                    panX, panY, zoom);
+            graphics.flush();
         }
         graphics.pose().pushPose();
         graphics.pose().translate(panX, panY, 0.0F);
@@ -2321,12 +2310,16 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
 
     private void renderSingleTreeCanvas(GuiGraphics graphics, RecipeTreeTheme.Palette theme) {
         if (autoMergeSameMaterials) {
-            graphics.drawManaged(() -> renderMergedLayerEdges(graphics));
+            graphics.flush();
+            renderMergedLayerEdges(graphics);
+            graphics.flush();
             renderMergedLayers(graphics);
             graphics.pose().translate(0.0F, 0.0F, 1.0F);
             renderTopMaterialsMerged(graphics);
         } else {
-            graphics.drawManaged(() -> renderEdges(graphics));
+            graphics.flush();
+            renderEdges(graphics);
+            graphics.flush();
             graphics.pose().translate(0.0F, 0.0F, 1.0F);
             renderTopMaterials(graphics);
             renderNodes(graphics);
@@ -2753,7 +2746,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         int sourceHeight = Math.max(1, rect.getHeight());
         int availableWidth = Math.max(24, right - left);
         float scale = Math.min(1.0F, availableWidth / (float) sourceWidth);
-        int drawnWidth = Math.max(1, Math.round(sourceWidth * scale));
         int drawnHeight = Math.max(1, Math.round(sourceHeight * scale));
         int drawX = left;
         int drawY = textY;
@@ -3544,7 +3536,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         if (rootRowCache == null) {
             return;
         }
-        int contentWidth = computeMergedLayerContentWidth();
         int startX = 36;
         int rowX = mergedRowX(startX, rootRowCache);
         int rootY = 42 + TOP_MATERIALS_OFFSET;
@@ -3758,7 +3749,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     private void renderTopMaterialsPinButton(GuiGraphics graphics, int x, int y) {
-        RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
         renderSmallControlIcon(graphics, "+", x, y, 12);
         topMaterialsPinButtonBounds = new TopMaterialsPinButtonBounds(x, y, 12, 12);
     }
@@ -4032,12 +4022,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 return;
             }
         }
-        if (pendingAlternativeSelection != null) {
-            for (AlternativeOptionBounds option : alternativeOptionBounds) {
-                if (option.contains(mouseX, mouseY) && option.ingredient() != null) {
-                    renderVanillaIngredientTooltip(graphics, option.ingredient(), mouseX, mouseY);
-                    return;
-                }
+        if (alternativePicker.isOpen()) {
+            ITypedIngredient<?> hovered = alternativePicker.hoveredIngredient(mouseX, mouseY);
+            if (hovered != null) {
+                renderVanillaIngredientTooltip(graphics, hovered, mouseX, mouseY);
+                return;
             }
         }
         List<Component> substitutionTooltip = patternSubstitutionTooltipAt(mouseX, mouseY);
@@ -4504,10 +4493,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 current.title(), current.subtitle(), current.subtitleIcon(), current.recipeId(), inputs);
     }
 
-    private RecipeTreeInputViewModel inputFromPatternSlot(PatternEncodingSlot slot, boolean consumed) {
-        return inputFromPatternSlot(slot, consumed, -1);
-    }
-
     private RecipeTreeInputViewModel inputFromPatternSlot(PatternEncodingSlot slot, boolean consumed, int patternSlotIndex) {
         List<DisplayOption> options = displayOptionsFromPatternSlot(slot);
         RequestedIngredient requested = requestedIngredientFromPatternSlot(slot);
@@ -4635,8 +4620,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
         RecipeTreeOverviewScreen focusedEditor = focusedTree();
-        if (focusedEditor != this && focusedEditor.pendingAlternativeSelection != null
+        if (focusedEditor != this && focusedEditor.alternativePicker.isOpen()
                 && focusedEditor.mouseClicked(mouseX, mouseY, button)) {
+            return true;
+        }
+        if (handleAlternativePickerClick(mouseX, mouseY, button)) {
             return true;
         }
         if (focusedEditor != this && mouseX >= this.width - INSPECTOR_WIDTH - 8
@@ -4719,14 +4707,8 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             }
         }
         if (autoMergeSameMaterials) {
-            if (pendingAlternativeSelection != null) {
-                for (AlternativeOptionBounds option : alternativeOptionBounds) {
-                    if (option.contains(mouseX, mouseY)) {
-                        selectAlternative(option.index());
-                        return true;
-                    }
-                }
-                pendingAlternativeSelection = null;
+            if (handleAlternativePickerClick(mouseX, mouseY, button)) {
+                return true;
             }
             if (!insideWorkspace) {
                 return super.mouseClicked(mouseX, mouseY, button);
@@ -4781,14 +4763,8 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             }
             return super.mouseClicked(mouseX, mouseY, button);
         }
-        if (pendingAlternativeSelection != null) {
-            for (AlternativeOptionBounds option : alternativeOptionBounds) {
-                if (option.contains(mouseX, mouseY)) {
-                    selectAlternative(option.index());
-                    return true;
-                }
-            }
-            pendingAlternativeSelection = null;
+        if (handleAlternativePickerClick(mouseX, mouseY, button)) {
+            return true;
         }
         if (!insideWorkspace) {
             return super.mouseClicked(mouseX, mouseY, button);
@@ -5029,10 +5005,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             }
             return true;
         }
-        if (pendingAlternativeSelection != null && isInsideAlternativeViewport(mouseX, mouseY)
-                && getAlternativeOptionCount() > getAlternativeVisibleCount()) {
-            alternativeScroll -= (int) Math.signum(scrollY);
-            clampAlternativeScroll();
+        if (alternativePicker.mouseScrolled(mouseX, mouseY, scrollY)) {
             return true;
         }
         if (!isInsideWorkspace(mouseX, mouseY)) {
@@ -5052,6 +5025,9 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         if (focusedEditor != this && focusedEditor.draggingInspectorScrollbar) {
             return focusedEditor.mouseReleased(mouseX, mouseY, button);
         }
+        if (alternativePicker.mouseReleased()) {
+            return true;
+        }
         if (button == 0 && draggingInspectorScrollbar) {
             draggingInspectorScrollbar = false;
             return true;
@@ -5064,6 +5040,9 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         RecipeTreeOverviewScreen focusedEditor = focusedTree();
         if (focusedEditor != this && focusedEditor.draggingInspectorScrollbar) {
             return focusedEditor.mouseDragged(mouseX, mouseY, button, dragX, dragY);
+        }
+        if (alternativePicker.mouseDragged(mouseX, mouseY, this.width, this.height)) {
+            return true;
         }
         if (button == 0 && draggingInspectorScrollbar) {
             updateInspectorScrollFromThumb(mouseY - inspectorScrollbarDragOffset);
@@ -5165,6 +5144,9 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                 && focusedEditor.patternAmountEditor.visible) {
             return focusedEditor.charTyped(codePoint, modifiers);
         }
+        if (alternativePicker.charTyped(codePoint, modifiers)) {
+            return true;
+        }
         return super.charTyped(codePoint, modifiers);
     }
 
@@ -5181,6 +5163,9 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
                     patternAmountEditor != null && patternAmountEditor.visible,
                     searchBox != null && searchBox.isFocused(),
                     returnScreen == null ? "<null>" : returnScreen.getClass().getName());
+        }
+        if (alternativePicker.keyPressed(keyCode, scanCode, modifiers)) {
+            return true;
         }
         if (patternAmountEditor != null && patternAmountEditor.visible) {
             if (keyCode == 257 || keyCode == 335) {
@@ -5287,7 +5272,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     /** Releases per-screen workers when this workspace view is permanently replaced. */
     public void releaseWorkspaceResources() {
         pendingJeiSelection = null;
-        pendingAlternativeSelection = null;
+        alternativePicker.close();
         planService.close();
         if (workspaceHost == null) {
             for (RecipeTreeOverviewScreen tree : workspaceTreeScreens.values()) {
@@ -5300,7 +5285,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
 
     private void releaseEmbeddedResources() {
         pendingJeiSelection = null;
-        pendingAlternativeSelection = null;
+        alternativePicker.close();
         planService.close();
     }
 
@@ -5720,10 +5705,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         return false;
     }
 
-    private boolean isManuallyCollapsed(String signature) {
-        return manuallyCollapsedSignatures.contains(signature) || context.isCollapsed(signature);
-    }
-
     private boolean isManuallyCollapsed(RecipeTreeNodeViewModel parent, int inputIndex,
             RecipeTreeInputViewModel input, String signature) {
         if (manuallyCollapsedSignatures.contains(signature)) {
@@ -5739,23 +5720,11 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         return collapsed;
     }
 
-    private void rememberManualCollapse(String signature) {
-        manuallyCollapsedSignatures.add(signature);
-        collapsedStateCache.clear();
-        context.rememberCollapsed(signature);
-    }
-
     private void rememberManualCollapse(RecipeTreeNodeViewModel parent, int inputIndex,
             RecipeTreeInputViewModel input, String signature) {
         manuallyCollapsedSignatures.add(signature);
         collapsedStateCache.clear();
         context.rememberCollapsed(signature);
-    }
-
-    private void forgetManualCollapse(String signature) {
-        manuallyCollapsedSignatures.remove(signature);
-        collapsedStateCache.clear();
-        context.forgetCollapsed(signature);
     }
 
     private void forgetManualCollapse(RecipeTreeNodeViewModel parent, int inputIndex,
@@ -5888,9 +5857,7 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
 
     private void closeSelection() {
         this.pendingJeiSelection = null;
-        this.pendingAlternativeSelection = null;
-        this.alternativeScroll = 0;
-        this.alternativeOptionBounds.clear();
+        this.alternativePicker.close();
         updateSelectionButtons();
     }
 
@@ -6188,7 +6155,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         zoomOutButton.setY(8);
         zoomOutButton.setWidth(22);
         zoomOutButton.setHeight(20);
-        toolbarLeft = this.width - 160;
 
         int headerActionsRight = this.width - 160;
         planReportButton.setWidth(Math.max(48, this.font.width(planReportButton.getMessage()) + 12));
@@ -6264,41 +6230,8 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     private void renderAlternativeSelection(GuiGraphics graphics, int mouseX, int mouseY) {
-        alternativeOptionBounds.clear();
-        if (pendingAlternativeSelection == null) {
-            return;
-        }
-
-        List<DisplayOption> alternatives = pendingAlternativeSelection.alternatives();
-        if (alternatives.isEmpty()) {
-            pendingAlternativeSelection = null;
-            return;
-        }
-
-        int visibleCount = getAlternativeVisibleCount();
-        int panelWidth = 148;
-        int panelHeight = visibleCount * 18 + 6;
-        int panelX = Math.max(6, Math.min(this.width - panelWidth - 6, pendingAlternativeSelection.anchorX() + 12));
-        int panelY = Math.max(6, Math.min(this.height - panelHeight - 6, pendingAlternativeSelection.anchorY() - 4));
-        RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
-        RecipeTreeTheme.drawFramedPanel(graphics, panelX, panelY, panelX + panelWidth, panelY + panelHeight);
-
-        clampAlternativeScroll();
-        int start = alternativeScroll;
-        int end = Math.min(alternatives.size(), start + visibleCount);
-        for (int i = start; i < end; i++) {
-            int optionY = panelY + 4 + (i - start) * 18;
-            DisplayOption option = alternatives.get(i);
-            boolean selected = i == pendingAlternativeSelection.selectedAlternativeIndex();
-            if (selected) {
-                graphics.fill(panelX + 3, optionY, panelX + panelWidth - 3, optionY + 17, theme.selectedFill());
-            }
-            renderTypedSlot(graphics, panelX + 4, optionY, option.typedIngredient());
-            graphics.drawString(this.font, trimToWidth(Component.literal(option.label()), panelWidth - 28),
-                    panelX + 24, optionY + 5,
-                    selected ? theme.onControlText() : theme.alternativeText(), false);
-            alternativeOptionBounds.add(new AlternativeOptionBounds(i, option.typedIngredient(), panelX + 3, optionY, panelWidth - 6, 17));
-        }
+        alternativePicker.render(graphics, this.font, mouseX, mouseY, this.width, this.height,
+                (g, slot) -> renderTypedSlot(g, slot.x(), slot.y(), slot.ingredient()));
     }
 
     private void openAlternativeSelection(AlternativeButtonBounds bounds) {
@@ -6313,27 +6246,48 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             members = List.of();
         }
         if (members.isEmpty()) {
-            pendingAlternativeSelection = null;
+            alternativePicker.close();
             return;
         }
         RecipeTreeInputViewModel representative = members.get(0);
         int anchorX = (int) Math.round(bounds.x() * zoom + panX);
         int anchorY = (int) Math.round(bounds.y() * zoom + panY);
-        pendingAlternativeSelection = new PendingAlternativeSelection(List.copyOf(members), representative.displayOptions(),
-                representative.selectedAlternativeIndex(), anchorX, anchorY);
-        alternativeScroll = 0;
+        if (searchBox != null) {
+            searchBox.setFocused(false);
+        }
+        alternativePicker.open(this.font, List.copyOf(members), representative.displayOptions(),
+                representative.selectedAlternativeIndex(), anchorX, anchorY, this.width, this.height);
+    }
+
+    private boolean handleAlternativePickerClick(double mouseX, double mouseY, int button) {
+        if (!alternativePicker.isOpen()) {
+            return false;
+        }
+        if (!alternativePicker.contains(mouseX, mouseY)) {
+            alternativePicker.close();
+            return false;
+        }
+        OptionalInt selected = alternativePicker.mouseClicked(mouseX, mouseY, button);
+        if (selected.isPresent()) {
+            selectAlternative(selected.getAsInt());
+        }
+        if (searchBox != null && alternativePicker.isSearchFocused()) {
+            searchBox.setFocused(false);
+        }
+        return true;
     }
 
     private void selectAlternative(int index) {
-        if (pendingAlternativeSelection == null) {
+        if (!alternativePicker.isOpen()) {
             return;
         }
+        List<RecipeTreeInputViewModel> members = alternativePicker.members();
         recordHistory();
-        for (RecipeTreeInputViewModel member : pendingAlternativeSelection.members()) {
+        for (RecipeTreeInputViewModel member : members) {
             member.selectAlternative(index);
         }
-        syncDraftAlternativesForMembers(pendingAlternativeSelection.members());
-        pendingAlternativeSelection = null;
+        syncDraftAlternativesForMembers(members);
+        alternativePicker.close();
         rebuildLayout();
     }
 
@@ -6428,30 +6382,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             }
         }
         return -1;
-    }
-
-    private int getAlternativeVisibleCount() {
-        return 8;
-    }
-
-    private int getAlternativeOptionCount() {
-        return pendingAlternativeSelection == null ? 0 : pendingAlternativeSelection.alternatives().size();
-    }
-
-    private void clampAlternativeScroll() {
-        int maxScroll = Math.max(0, getAlternativeOptionCount() - getAlternativeVisibleCount());
-        alternativeScroll = Math.max(0, Math.min(maxScroll, alternativeScroll));
-    }
-
-    private boolean isInsideAlternativeViewport(double mouseX, double mouseY) {
-        if (pendingAlternativeSelection == null) {
-            return false;
-        }
-        int panelWidth = 148;
-        int panelHeight = getAlternativeVisibleCount() * 18 + 6;
-        int panelX = Math.max(6, Math.min(this.width - panelWidth - 6, pendingAlternativeSelection.anchorX() + 12));
-        int panelY = Math.max(6, Math.min(this.height - panelHeight - 6, pendingAlternativeSelection.anchorY() - 4));
-        return mouseX >= panelX && mouseX <= panelX + panelWidth && mouseY >= panelY && mouseY <= panelY + panelHeight;
     }
 
     private Component trimToWidth(Component text, int maxWidth) {
@@ -6676,12 +6606,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     private static long saturatedLongMultiply(long left, long right) {
         if (left <= 0L || right <= 0L) return 0L;
         return left > Long.MAX_VALUE / right ? Long.MAX_VALUE : left * right;
-    }
-
-    private static long ceilDivLong(long numerator, long denominator) {
-        if (numerator <= 0L) return 0L;
-        long safeDenominator = Math.max(1L, denominator);
-        return 1L + (numerator - 1L) / safeDenominator;
     }
 
     private @Nullable UnresolvedInputSlot firstUnresolvedSlot(RequestedIngredient material) {
@@ -7189,17 +7113,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             return parentNode;
         }
 
-        private MergedLeaf withAddedAmount(int addedAmount, RecipeTreeInputViewModel member) {
-            List<RecipeTreeInputViewModel> nextMembers = new ArrayList<>(members);
-            nextMembers.add(member);
-            List<RecipeTreeNodeViewModel> nextParents = new ArrayList<>(memberParents);
-            if (!nextParents.isEmpty()) {
-                nextParents.add(parentNode);
-            }
-            return new MergedLeaf(ingredient, title, safeAdd(totalAmount, Math.max(1, addedAmount)), sourceAmountText, parentNode,
-                    List.copyOf(nextMembers), List.copyOf(nextParents));
-        }
-
         private RecipeTreeInputViewModel representative() {
             return members.getFirst();
         }
@@ -7244,10 +7157,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
         }
     }
 
-    private record PendingAlternativeSelection(List<RecipeTreeInputViewModel> members, List<DisplayOption> alternatives,
-            int selectedAlternativeIndex, int anchorX, int anchorY) {
-    }
-
     private record TopMaterialBounds(RequestedIngredient material, int x, int y, int width, int height) {
         private boolean contains(double mouseX, double mouseY) {
             return mouseX >= x && mouseX <= x + width && mouseY >= y && mouseY <= y + height;
@@ -7271,9 +7180,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
     }
 
     private record RootBatchAnchor(int left, int right, int y) {
-        private int width() {
-            return Math.max(1, right - left);
-        }
     }
 
     private record AlternativeButtonBounds(@Nullable MergedLeaf leaf, @Nullable RequestedIngredient material, int x, int y, int width, int height) {
@@ -7285,12 +7191,6 @@ public class RecipeTreeOverviewScreen extends Screen implements RecipeTreeJeiTra
             return new AlternativeButtonBounds(null, material, x, y, width, height);
         }
 
-        private boolean contains(double mouseX, double mouseY) {
-            return mouseX >= x && mouseX <= x + width && mouseY >= y && mouseY <= y + height;
-        }
-    }
-
-    private record AlternativeOptionBounds(int index, @Nullable ITypedIngredient<?> ingredient, int x, int y, int width, int height) {
         private boolean contains(double mouseX, double mouseY) {
             return mouseX >= x && mouseX <= x + width && mouseY >= y && mouseY <= y + height;
         }

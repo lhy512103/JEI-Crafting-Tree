@@ -1,6 +1,5 @@
 package com.lhy.jeict.client;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
@@ -110,6 +109,9 @@ public final class RecipeTreeAutoCraftService {
             return new Result(Outcome.COMPLETED, context.title());
         }
         List<RecipeTreeRecipeViewModel> candidates = planned.recipes();
+        if (candidates.isEmpty()) {
+            return new Result(Outcome.MISSING_ITEMS, null);
+        }
         boolean sawHandler = false;
         boolean sawMissingItems = false;
         boolean sawFailure = false;
@@ -264,6 +266,12 @@ public final class RecipeTreeAutoCraftService {
             inputsReady &= rawUsed >= required;
         }
         path.remove(node);
+        if (inputsReady) {
+            long produced = saturatedMultiply(crafts, recipe.primaryOutputAmount());
+            if (produced > missing) {
+                available.merge(outputKey, produced - missing, RecipePlanSolver::saturatedAdd);
+            }
+        }
         return inputsReady ? new Selection(recipe, false) : new Selection(null, false);
     }
 

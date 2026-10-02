@@ -22,7 +22,11 @@ public final class CraftingTreeAutoCrafting {
         NO_SPACE,
         TRANSFER_FAILED,
         SYNC_TIMEOUT,
-        OPERATION_LIMIT
+        OPERATION_LIMIT,
+        MISSING_ITEMS,
+        NO_HANDLER,
+        NO_CONTAINER,
+        REJECTED
     }
 
     public record Status(boolean running, @Nullable StopReason stopReason, @Nullable String recipeTitle) {

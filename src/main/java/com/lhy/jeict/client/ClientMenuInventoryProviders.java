@@ -19,6 +19,7 @@ public final class ClientMenuInventoryProviders {
     }
 
     /** Legacy built-in registration alias. */
+    @SuppressWarnings("deprecation")
     public static void register(ClientMenuInventoryProvider provider) {
         register((MenuInventorySource) provider);
     }

@@ -10,6 +10,7 @@ import java.util.Optional;
 
 import org.jetbrains.annotations.Nullable;
 
+import com.lhy.jeict.client.IngredientCandidateRanker;
 import com.lhy.jeict.config.RecipeTreeConfig;
 import com.lhy.jeict.recipe_tree.RecipeTreeInputViewModel;
 import com.lhy.jeict.recipe_tree.RecipeTreeInputViewModel.DisplayOption;
@@ -224,35 +225,13 @@ public final class RecipeTreeJeiLookup {
         return Optional.empty();
     }
 
-    @SuppressWarnings({ "rawtypes", "unchecked" })
-    private static Optional<RecipeTreeRecipeViewModel> findRecipeByIdInType(IJeiRuntime runtime, RecipeType<?> recipeType,
-            ResourceLocation targetRecipeId) {
-        IRecipeCategory category = runtime.getRecipeManager().getRecipeCategory((RecipeType) recipeType);
-        if (category == null) {
-            return Optional.empty();
-        }
-
-        List<?> recipes = runtime.getRecipeManager()
-                .createRecipeLookup((RecipeType) recipeType)
-                .includeHidden()
-                .get()
-                .toList();
-
-        for (Object recipe : recipes) {
-            ResourceLocation recipeId = category.getRegistryName(recipe);
-            if (targetRecipeId.equals(recipeId)) {
-                return createSnapshotForRecipe(runtime, category, recipe);
-            }
-        }
-
-        return Optional.empty();
-    }
-
+    @SuppressWarnings("rawtypes")
     private static Optional<RecipeTreeRecipeViewModel> createSnapshotForRecipe(IJeiRuntime runtime, IRecipeCategory category,
             Object recipe) {
         return createSnapshotForRecipe(runtime, category, recipe, null);
     }
 
+    @SuppressWarnings({ "rawtypes", "unchecked" })
     private static Optional<RecipeTreeRecipeViewModel> createSnapshotForRecipe(IJeiRuntime runtime, IRecipeCategory category,
             Object recipe, @Nullable ITypedIngredient<?> preferredOutput) {
         return createSnapshotForRecipeTyped(runtime, category, recipe, preferredOutput);
@@ -351,16 +330,14 @@ public final class RecipeTreeJeiLookup {
                 ITypedIngredient<?> displayed = getDisplayedIngredient(slotView);
                 if (displayed != null) amount = resolveDisplayedIngredientAmountLong(ingredientManager, displayed, amount);
             }
-            inputs.add(new RecipeTreeInputViewModel(ingredient, displayOptions, amount,
+            RecipeTreeInputViewModel input = new RecipeTreeInputViewModel(ingredient, displayOptions, amount,
                     formatAmountText(slotView, (int) Math.min(Integer.MAX_VALUE, amount)), consumed,
-                    preserveSlotIndex ? slotIndex : -1));
+                    preserveSlotIndex ? slotIndex : -1);
+            if (input.hasAlternativeChoices()) {
+                input.selectAlternative(IngredientCandidateRanker.bestIndex(input.displayOptions()));
+            }
+            inputs.add(input);
         }
-    }
-
-    private static int resolveDisplayedIngredientAmount(IIngredientManager ingredientManager, ITypedIngredient<?> displayed,
-            int fallbackCount) {
-        return (int) Math.min(Integer.MAX_VALUE,
-                resolveDisplayedIngredientAmountLong(ingredientManager, displayed, fallbackCount));
     }
 
     private static long resolveDisplayedIngredientAmountLong(IIngredientManager ingredientManager,

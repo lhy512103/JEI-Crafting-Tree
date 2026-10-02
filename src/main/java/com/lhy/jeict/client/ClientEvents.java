@@ -44,7 +44,6 @@ public final class ClientEvents {
     public static void onScreenRenderPost(ScreenEvent.Render.Post event) {
         FloatingMaterialOverlayState.updateDrag();
         FloatingMaterialOverlayState.render(event.getGuiGraphics());
-        JeiRecipeTreeShortcutOverlay.render(event);
     }
 
     public static void onScreenMousePressed(ScreenEvent.MouseButtonPressed.Pre event) {
@@ -52,7 +51,9 @@ public final class ClientEvents {
                 && !FloatingMaterialOverlayState.isAutoCraftButtonAt(event.getMouseX(), event.getMouseY())) {
             RecipeTreeAutoCraftSession.cancelForManualInput();
         }
-        if (JeiRecipeTreeShortcutOverlay.handleMousePressed(event)) return;
+        if (JeiRecipeTreeShortcutOverlay.handleMousePressed(event)) {
+            return;
+        }
         FloatingMaterialOverlayState.handleScreenMouseClicked(event);
     }
 
