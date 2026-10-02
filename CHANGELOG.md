@@ -17,6 +17,7 @@
 9. Fixed: creative refill over-supplying materials; demand is now merged by material type.
 10. Optimized: multi-candidate inputs default to AE2 encoding order: already-craftable/pattern first, then undamaged, then highest stock.
 11. Optimized: alternative-material picker is a draggable/resizable floating panel with a search box.
+12. Optimized: the JEI bookmark shortcut is a JEI-chrome icon button and shifts right when ExtendedAE Plus is present.
 
 ### 中文
 
@@ -31,6 +32,7 @@
 9. 修复：创造补充材料过多的bug，现在按材料种类合并需求量。
 10. 优化：多候选输入默认按 AE 编码规则选择：已有样板优先，其次完好，再按存量。
 11. 优化：候选材料选择改为可拖拽缩放的悬浮面板，并带搜索框。
+12. 优化：书签栏进入配方树改为 JEI 样式图标按钮，并避开 ExtendedAE Plus 按钮。
 
 ## v0.0.4
 

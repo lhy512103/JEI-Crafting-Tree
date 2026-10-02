@@ -1,7 +1,7 @@
 dependencies {
     // JEICT compile-time dependencies.
     // Keep the compile API and runtime implementation on the same JEI build.
-    compileOnly "curse.maven:jei-238222:8498870"
+    compileOnly "curse.maven:jei-238222:8895652"
     compileOnly "org.appliedenergistics:appliedenergistics2:${ae2_version}"
     compileOnly "curse.maven:sophisticated-core-618298:${sophisticated_core_file}"
 
@@ -22,7 +22,7 @@ dependencies {
     localRuntime "thedarkcolour:kotlinforforge-neoforge:${kotlinforforge_version}"
 
     // Recipe viewer and HUD mods.
-    localRuntime "curse.maven:jei-238222:8498870"
+    localRuntime "curse.maven:jei-238222:8895652"
     localRuntime "maven.modrinth:jade:${jade_version}"
 
     // Major content mods.
@@ -80,11 +80,11 @@ dependencies {
     localRuntime "curse.maven:data-energistics-1565514:8429524"
     // Prefer the sibling AE2 Utility development build so JEICT and its backend API stay in sync.
     // Published/dev environments without that checkout continue to use the CurseMaven release.
-    def localAe2UtilityJar = file("../ae2utility-1.21.1-neoforge/build/libs/ae2utility-1.7.2.jar")
+    def localAe2UtilityJar = file("../ae2utility-1.21.1-neoforge/build/libs/ae2utility-1.8.0.jar")
     if (localAe2UtilityJar.exists()) {
         localRuntime files(localAe2UtilityJar)
     } else {
-        localRuntime "curse.maven:ae2-utility-1521605:8479191"
+        localRuntime "curse.maven:ae2-utility-1521605:8973751"
     }
 
     // Client-only runtime mods.

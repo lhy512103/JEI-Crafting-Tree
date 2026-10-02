@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 import com.lhy.jeict.api.InventoryAmount;
+import com.lhy.jeict.api.MenuInventorySource;
 import com.lhy.jeict.planning.MaterialKey;
 import com.lhy.jeict.planning.RecipePlanSolver;
 import com.lhy.jeict.util.IngredientIdentityUtil;
@@ -18,7 +19,7 @@ import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 
 /** Fallback provider for real item slots exposed by vanilla and modded menus. */
-final class SlotMenuInventoryProvider implements ClientMenuInventoryProvider {
+final class SlotMenuInventoryProvider implements MenuInventorySource {
     @Override
     public String id() {
         return "jeict:menu_slots";

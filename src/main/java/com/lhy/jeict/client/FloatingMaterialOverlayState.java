@@ -1535,7 +1535,6 @@ public final class FloatingMaterialOverlayState {
 
     private static String formatEntryAmount(Entry entry, long amount) {
         long safeAmount = Math.max(0L, amount);
-        ITypedIngredient<?> ingredient = entry.ingredient();
         if (usesMilliBucketUnits(entry)) {
             if (safeAmount < 1000) {
                 return safeAmount + " mB";
