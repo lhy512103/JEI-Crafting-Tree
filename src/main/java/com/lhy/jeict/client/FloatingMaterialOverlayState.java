@@ -1,6 +1,7 @@
 package com.lhy.jeict.client;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -17,6 +18,7 @@ import com.lhy.jeict.planning.MaterialKey;
 import com.lhy.jeict.util.GenericIngredientUtil;
 import com.lhy.jeict.util.IngredientIdentityUtil;
 import com.mojang.blaze3d.platform.InputConstants;
+import com.mojang.blaze3d.systems.RenderSystem;
 
 import mezz.jei.api.gui.drawable.IDrawable;
 import mezz.jei.api.constants.VanillaTypes;
@@ -44,53 +46,46 @@ import net.neoforged.neoforge.fluids.FluidStack;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 public final class FloatingMaterialOverlayState {
-    private static final int BASE_WIDTH = 196;
     private static final int HEADER_HEIGHT = 20;
     private static final int FOOTER_HEIGHT = 16;
     private static final int CONTROL_SIZE = 12;
-    private static final int SCROLLBAR_WIDTH = 4;
-    private static final int MAX_CONTENT_HEIGHT = 240;
+    private static final int SCROLLBAR_WIDTH = 3;
+    private static final int SCROLL_THUMB_HEIGHT = 15;
     private static final int CONTENT_PADDING = 6;
-    private static final int GROUP_WIDTH = BASE_WIDTH - CONTENT_PADDING * 2;
-    private static final int GROUP_PADDING = 4;
-    private static final int GROUP_GAP = 4;
+    private static final int SLOT_SIZE = 18;
+    private static final int SLOT_ICON_PAD = 1;
     private static final int ICON_SIZE = 16;
-    private static final int ICON_GAP = 2;
-    private static final int MATERIAL_CELL_SIZE = ICON_SIZE + ICON_GAP;
-    private static final int MAX_INPUTS_SINGLE_ROW = 6;
-    private static final int INPUTS_PER_ROW_WRAPPED = 8;
-    private static final int ARROW_WIDTH = 12;
-    private static final int OUTPUT_X = GROUP_WIDTH - GROUP_PADDING - ICON_SIZE;
-    private static final int BADGE_SIZE = 8;
-    private static final float BADGE_Z = 260.0F;
-    private static final int SCROLL_STEP = 14;
-    private static final float JEI_BOOKMARK_Z = 200.0F;
-    private static final float OVERLAY_Z = JEI_BOOKMARK_Z + 1.0F;
+    private static final int DEFAULT_COLUMNS = 6;
+    private static final int MIN_COLUMNS = 3;
+    private static final int MAX_COLUMNS = 16;
+    private static final int CHAIN_INSET = 2;
+    private static final int RESIZE_HANDLE = 10;
+    private static final int DEFAULT_MAX_CONTENT_HEIGHT = 14 * SLOT_SIZE + CHAIN_INSET * 2;
+    private static final int CHAIN_COLOR = 0xFF4FA3FF;
+    private static final int MULTIPLIER_COLOR = 0xFFADADAD;
+    private static final int CATALYST_MARKER_COLOR = 0xFFFFFF55;
+    private static final int SCROLL_STEP = 18;
+    private static final float OVERLAY_Z = 500.0F;
     private static final float TOOLTIP_Z = OVERLAY_Z + 400.0F;
-    private static final int AUTO_CRAFT_WIDTH = 46;
-    private static final int AUTO_CRAFT_LEFT = BASE_WIDTH - CONTENT_PADDING - AUTO_CRAFT_WIDTH;
-    private static final int CREATIVE_REFILL_WIDTH = 46;
-    private static final int CREATIVE_REFILL_LEFT = AUTO_CRAFT_LEFT - 4 - CREATIVE_REFILL_WIDTH;
     private static final int MAX_MISSING_TOOLTIP_LINES = 8;
     private static final long STOP_STATUS_MILLIS = 6000L;
     private static final float SHORTAGE_TINT_Z = 200.0F;
     private static final int MISSING_TINT = 0x44FF0000;
     private static final int PARTIAL_TINT = 0x44FFAA00;
     private static final int CRAFTABLE_TINT = 0x4455AAFF;
-    private static final Component AUTO_CRAFT_LABEL =
-            Component.translatable("gui.jeict.recipe_tree.floating_auto_craft_label");
-    private static final Component CREATIVE_REFILL_LABEL =
-            Component.translatable("gui.jeict.recipe_tree.floating_creative_refill_label");
     private static final ResourceLocation MICRO_AMOUNT_FONT = ResourceLocation.withDefaultNamespace("uniform");
 
     private static Snapshot snapshot;
     private static int x = -1;
     private static int y = 8;
-    private static int lastWidth = BASE_WIDTH;
-    private static int lastHeight = 0;
+    private static int lastWidth;
+    private static int lastHeight;
+    private static int userWidth;
+    private static int userHeight;
     private static float scale = 1.0F;
     private static boolean pinned;
     private static boolean dragging;
+    private static boolean resizing;
     private static boolean leftMouseDown;
     private static double dragOffsetX;
     private static double dragOffsetY;
@@ -100,6 +95,9 @@ public final class FloatingMaterialOverlayState {
     private static boolean showAll;
     private static long lastTitleClickTime;
     private static List<DisplayGroup> cachedDisplayGroups = List.of();
+    private static List<PlacedSlot> cachedSlots = List.of();
+    private static int cachedRows;
+    private static int cachedLayoutColumns = -1;
     private static long cachedInventoryVersion = Long.MIN_VALUE;
     private static boolean cachedShowAll;
     private static boolean displayEntriesDirty = true;
@@ -115,7 +113,7 @@ public final class FloatingMaterialOverlayState {
         displayEntriesDirty = true;
         Minecraft minecraft = Minecraft.getInstance();
         if (x < 0 && minecraft.getWindow() != null) {
-            x = Math.max(6, minecraft.getWindow().getGuiScaledWidth() - Math.round(BASE_WIDTH * scale) - 8);
+            x = Math.max(6, minecraft.getWindow().getGuiScaledWidth() - Math.round(widthForColumns(DEFAULT_COLUMNS) * scale) - 8);
             y = 8;
         }
     }
@@ -123,43 +121,47 @@ public final class FloatingMaterialOverlayState {
     public static void clear() {
         snapshot = null;
         dragging = false;
+        resizing = false;
         leftMouseDown = false;
         scrollOffset = 0;
         maxScrollOffset = 0;
         cachedDisplayGroups = List.of();
+        cachedSlots = List.of();
+        cachedRows = 0;
+        cachedLayoutColumns = -1;
         cachedMissingRaw = List.of();
         cachedInventoryVersion = Long.MIN_VALUE;
         displayEntriesDirty = true;
+        CursorHelper.overlay(CursorHelper.Shape.ARROW);
     }
 
     public static void render(GuiGraphics graphics) {
-        if (!RecipeTreeConfig.SHOW_FLOATING_MATERIALS.get()) return;
+        if (!RecipeTreeConfig.SHOW_FLOATING_MATERIALS.get()) {
+            CursorHelper.overlay(CursorHelper.Shape.ARROW);
+            return;
+        }
         if (!isInWorld()) {
             clear();
             return;
         }
         if (snapshot == null || (snapshot.entries().isEmpty() && snapshot.tasks().isEmpty())) {
+            CursorHelper.overlay(CursorHelper.Shape.ARROW);
             return;
         }
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.options.hideGui) {
+            CursorHelper.overlay(CursorHelper.Shape.ARROW);
             return;
         }
         Font font = minecraft.font;
-        List<DisplayGroup> displayGroups = displayGroups();
+        refreshPanelSize();
 
-        int totalContentHeight = computeTotalContentHeight(displayGroups);
-        int visibleContentHeight = MAX_CONTENT_HEIGHT;
-        int contentHeight = HEADER_HEIGHT + 4 + Math.min(totalContentHeight, visibleContentHeight) + 4 + FOOTER_HEIGHT;
-        int height = Math.min(260 + FOOTER_HEIGHT, contentHeight);
-        int actualVisibleContentHeight = height - HEADER_HEIGHT - 8 - FOOTER_HEIGHT;
+        int totalContentHeight = chainContentHeight();
+        int actualVisibleContentHeight = Math.max(0, lastHeight - HEADER_HEIGHT - 8 - FOOTER_HEIGHT);
         maxScrollOffset = Math.max(0, totalContentHeight - actualVisibleContentHeight);
-        scrollOffset = Math.min(scrollOffset, maxScrollOffset);
-        scrollOffset = Math.max(0, scrollOffset);
-
-        lastWidth = BASE_WIDTH;
-        lastHeight = height;
+        scrollOffset = Math.min(Math.max(0, scrollOffset), maxScrollOffset);
         clampToScreen();
+        int height = lastHeight;
 
         int mouseX = (int) Math.round(scaledMouseX());
         int mouseY = (int) Math.round(scaledMouseY());
@@ -171,120 +173,111 @@ public final class FloatingMaterialOverlayState {
         graphics.pose().scale(scale, scale, 1.0F);
 
         RecipeTreeTheme.Palette theme = RecipeTreeTheme.current();
-        RecipeTreeTheme.drawFramedPanel(graphics, 0, 0, BASE_WIDTH, height);
+        RecipeTreeTheme.drawFramedPanel(graphics, 0, 0, lastWidth, height);
 
         graphics.drawString(font, Component.translatable("gui.jeict.recipe_tree.floating_materials_title"), 22, 6,
                 theme.metricText(), false);
         drawControl(graphics, 6, 5, pinned ? "P" : "p", pinned ? theme.pinned() : theme.controlText());
-        drawControl(graphics, BASE_WIDTH - 44, 5, showAll ? "A" : "a", showAll ? theme.success() : theme.controlText());
+        drawControl(graphics, lastWidth - 44, 5, showAll ? "A" : "a", showAll ? theme.success() : theme.controlText());
         if (snapshot.context() != null) {
-            drawControl(graphics, BASE_WIDTH - 31, 5, "\u2190", theme.accent());
+            drawControl(graphics, lastWidth - 31, 5, "\u2190", theme.accent());
         }
-        drawControl(graphics, BASE_WIDTH - 18, 5, "x", theme.danger());
+        drawControl(graphics, lastWidth - 18, 5, "x", theme.danger());
 
         DisplayEntry hoveredEntry = null;
         Component hoveredMachineName = null;
 
         int contentTop = HEADER_HEIGHT + 4;
         int contentBottom = height - 4 - FOOTER_HEIGHT;
-        int groupX = CONTENT_PADDING;
-        int groupY = contentTop - scrollOffset;
-        for (DisplayGroup group : displayGroups) {
-            int groupBottom = groupY + group.height();
-            if (groupBottom > contentTop && groupY < contentBottom) {
-                boolean groupHovered = localMouseX >= groupX && localMouseX < groupX + GROUP_WIDTH
-                        && localMouseY >= groupY && localMouseY < groupBottom
-                        && localMouseY >= contentTop && localMouseY < contentBottom;
-                RecipeTreeTheme.drawMarkdownNode(graphics, groupX, groupY, groupX + GROUP_WIDTH, groupBottom,
-                        stateColor(group.state(), theme));
-                for (int entryIndex = 0; entryIndex < group.entries().size(); entryIndex++) {
-                    drawEntry(graphics, font, group.entries().get(entryIndex),
-                            groupX + inputX(group, entryIndex), groupY + inputY(group, entryIndex));
-                }
-                DisplayEntry output = group.output();
-                if (output != null) {
-                    int outX = groupX + OUTPUT_X;
-                    int outY = groupY + outputY(group);
-                    graphics.drawString(font, "\u2192", outX - ARROW_WIDTH + 2,
-                            groupY + (group.height() - font.lineHeight) / 2, theme.mutedText(), false);
-                    drawEntry(graphics, font, output, outX, outY);
-                    if (group.machineIcon() != null) {
-                        renderMachineBadge(graphics, group.machineIcon(), outX, outY, theme);
-                    }
-                }
-                if (groupHovered) {
-                    int gx = (int) Math.floor(localMouseX - groupX);
-                    int gy = (int) Math.floor(localMouseY - groupY);
-                    if (isOverBadge(group, gx, gy)) {
-                        hoveredMachineName = group.machineName();
-                    } else {
-                        hoveredEntry = entryAt(group, gx, gy);
-                    }
-                    RecipeTreeTheme.drawBorder(graphics, groupX - 1, groupY - 1,
-                            groupX + GROUP_WIDTH + 1, groupBottom + 1, theme.accent());
-                }
+        int chainX = CONTENT_PADDING + CHAIN_INSET;
+        int chainY = contentTop - scrollOffset + CHAIN_INSET;
+        PlacedSlot hoveredSlot = slotAt(localMouseX, localMouseY, chainX, chainY);
+        if (hoveredSlot != null && (localMouseY < contentTop || localMouseY >= contentBottom
+                || localMouseX < CONTENT_PADDING || localMouseX >= lastWidth - SCROLLBAR_WIDTH - 2)) {
+            hoveredSlot = null;
+        }
+        if (hoveredSlot != null) {
+            if (hoveredSlot.kind() == SlotKind.MACHINE) {
+                hoveredMachineName = hoveredSlot.machineName();
+            } else {
+                hoveredEntry = hoveredSlot.entry();
             }
-            groupY = groupBottom + GROUP_GAP;
         }
 
+        applyContentScissor(contentTop, contentBottom);
+        drawChainBorder(graphics, chainX, chainY);
+        for (PlacedSlot slot : cachedSlots) {
+            int sx = chainX + slot.col() * SLOT_SIZE;
+            int sy = chainY + slot.row() * SLOT_SIZE;
+            if (sy + SLOT_SIZE <= contentTop || sy >= contentBottom) {
+                continue;
+            }
+            if (slot == hoveredSlot) {
+                graphics.fill(sx, sy, sx + SLOT_SIZE, sy + SLOT_SIZE, theme.hoverFill());
+            }
+            drawPlacedSlot(graphics, font, slot, sx, sy);
+        }
+        if (hoveredSlot != null) {
+            int hsx = chainX + hoveredSlot.col() * SLOT_SIZE;
+            int hsy = chainY + hoveredSlot.row() * SLOT_SIZE;
+            RecipeTreeTheme.drawBorder(graphics, hsx, hsy, hsx + SLOT_SIZE, hsy + SLOT_SIZE, theme.accent());
+        }
+        RenderSystem.disableScissor();
+
         if (maxScrollOffset > 0) {
-            int trackX = BASE_WIDTH - SCROLLBAR_WIDTH - 2;
+            int trackX = lastWidth - SCROLLBAR_WIDTH - 2;
             int trackTop = contentTop;
             int trackBottom = contentBottom;
             int trackHeight = trackBottom - trackTop;
             if (trackHeight > 0) {
-                graphics.fill(trackX, trackTop, trackX + 2, trackBottom, theme.scrollbarTrack());
-                int thumbHeight = Math.max(12, trackHeight * trackHeight / (trackHeight + maxScrollOffset));
-                int thumbY = trackTop + (maxScrollOffset > 0
-                        ? (int) ((long) scrollOffset * (trackHeight - thumbHeight) / maxScrollOffset)
+                graphics.fill(trackX, trackTop, trackX + 1, trackBottom, theme.scrollbarTrack());
+                int thumbHeight = Math.min(SCROLL_THUMB_HEIGHT, trackHeight);
+                int travel = Math.max(0, trackHeight - thumbHeight);
+                int thumbY = trackTop + (maxScrollOffset > 0 && travel > 0
+                        ? (int) ((long) scrollOffset * travel / maxScrollOffset)
                         : 0);
-                graphics.fill(trackX - 1, thumbY, trackX + SCROLLBAR_WIDTH, thumbY + thumbHeight, theme.scrollbarThumb());
+                graphics.fill(trackX, thumbY, trackX + SCROLLBAR_WIDTH, thumbY + thumbHeight, theme.scrollbarThumb());
             }
         }
 
         int craftY = autoCraftButtonTop(height);
         boolean creativeRefillVisible = canCreativeRefill();
+        int craftLeft = actionCraftLeft();
+        int refillLeft = actionRefillLeft();
         boolean creativeRefillHovered = creativeRefillVisible
-                && localMouseX >= CREATIVE_REFILL_LEFT
-                && localMouseX < CREATIVE_REFILL_LEFT + CREATIVE_REFILL_WIDTH
+                && localMouseX >= refillLeft && localMouseX < refillLeft + CONTROL_SIZE
                 && localMouseY >= craftY && localMouseY < craftY + CONTROL_SIZE;
         if (creativeRefillVisible) {
-            RecipeTreeTheme.drawButton(graphics, CREATIVE_REFILL_LEFT, craftY, CREATIVE_REFILL_WIDTH, CONTROL_SIZE,
-                    creativeRefillHovered, true);
-            int refillTextY = craftY + Math.max(0, (CONTROL_SIZE - font.lineHeight) / 2);
-            graphics.drawCenteredString(font, CREATIVE_REFILL_LABEL,
-                    CREATIVE_REFILL_LEFT + CREATIVE_REFILL_WIDTH / 2, refillTextY,
-                    creativeRefillHovered ? theme.controlHoverText() : theme.controlText());
+            drawControl(graphics, refillLeft, craftY, "", theme.controlText());
+            drawRefillIcon(graphics, refillLeft, craftY,
+                    creativeRefillHovered ? theme.controlHoverText() : theme.success());
         }
-        boolean craftHovered = localMouseX >= AUTO_CRAFT_LEFT && localMouseX < AUTO_CRAFT_LEFT + AUTO_CRAFT_WIDTH
+        boolean craftHovered = localMouseX >= craftLeft && localMouseX < craftLeft + CONTROL_SIZE
                 && localMouseY >= craftY && localMouseY < craftY + CONTROL_SIZE;
         boolean autoCraftRunning = RecipeTreeAutoCraftSession.status().running();
-        RecipeTreeTheme.drawButton(graphics, AUTO_CRAFT_LEFT, craftY, AUTO_CRAFT_WIDTH, CONTROL_SIZE,
-                craftHovered, true);
-        Component autoCraftLabel = autoCraftRunning
-                ? Component.translatable("gui.jeict.recipe_tree.floating_auto_craft_stop_label")
-                : AUTO_CRAFT_LABEL;
-        int craftTextY = craftY + Math.max(0, (CONTROL_SIZE - font.lineHeight) / 2);
-        graphics.drawCenteredString(font, autoCraftLabel, AUTO_CRAFT_LEFT + AUTO_CRAFT_WIDTH / 2, craftTextY,
-                craftHovered ? theme.controlHoverText() : theme.controlText());
+        drawControl(graphics, craftLeft, craftY, "", theme.controlText());
+        drawCraftIcon(graphics, craftLeft, craftY, autoCraftRunning,
+                craftHovered ? theme.controlHoverText() : (autoCraftRunning ? theme.danger() : theme.accent()));
 
         int statusLeft = CONTENT_PADDING;
-        int statusRight = (creativeRefillVisible ? CREATIVE_REFILL_LEFT : AUTO_CRAFT_LEFT) - 4;
+        int statusRight = (creativeRefillVisible ? refillLeft : craftLeft) - 4;
         StatusLine status = statusLine(theme);
-        graphics.drawString(font, font.plainSubstrByWidth(status.text().getString(), statusRight - statusLeft),
+        int craftTextY = craftY + Math.max(0, (CONTROL_SIZE - font.lineHeight) / 2);
+        graphics.drawString(font, font.plainSubstrByWidth(status.text().getString(), Math.max(0, statusRight - statusLeft)),
                 statusLeft, craftTextY, status.color(), false);
         boolean statusHovered = localMouseX >= statusLeft && localMouseX < statusRight
                 && localMouseY >= craftY && localMouseY < craftY + CONTROL_SIZE;
         List<Component> statusTooltip = statusHovered ? status.tooltip() : null;
+        drawResizeGrip(graphics, lastWidth, height, theme.mutedText());
 
         graphics.pose().popPose();
 
-        Component controlTooltip = controlTooltipAt(localMouseX, localMouseY);
+        List<Component> controlTooltip = controlTooltipAt(localMouseX, localMouseY);
         if (controlTooltip != null || hoveredEntry != null || hoveredMachineName != null || statusTooltip != null) {
             graphics.pose().pushPose();
             graphics.pose().translate(0.0F, 0.0F, TOOLTIP_Z);
             if (controlTooltip != null) {
-                graphics.renderTooltip(font, List.of(controlTooltip), java.util.Optional.empty(), mouseX, mouseY);
+                graphics.renderTooltip(font, controlTooltip, java.util.Optional.empty(), mouseX, mouseY);
             } else if (hoveredMachineName != null) {
                 graphics.renderTooltip(font, List.of(hoveredMachineName),
                         java.util.Optional.empty(), mouseX, mouseY);
@@ -318,6 +311,7 @@ public final class FloatingMaterialOverlayState {
             }
             graphics.pose().popPose();
         }
+        CursorHelper.overlay(pointerCursor(localMouseX, localMouseY, mouseX, mouseY));
     }
 
     public static boolean handleScreenMouseClicked(ScreenEvent.MouseButtonPressed.Pre event) {
@@ -383,11 +377,21 @@ public final class FloatingMaterialOverlayState {
             leftMouseDown = false;
             return;
         }
-        if (!dragging || snapshot == null) {
+        if ((!dragging && !resizing) || snapshot == null) {
             return;
         }
         if (!leftMouseDown) {
             dragging = false;
+            resizing = false;
+            return;
+        }
+        if (resizing) {
+            userWidth = clamp((int) Math.round((scaledMouseX() - x) / scale), minPanelWidth(), maxPanelWidth());
+            userHeight = clamp((int) Math.round((scaledMouseY() - y) / scale), minPanelHeight(), maxPanelHeight());
+            lastWidth = userWidth;
+            lastHeight = userHeight;
+            cachedLayoutColumns = -1;
+            clampToScreen();
             return;
         }
         x = (int) Math.round(scaledMouseX() - dragOffsetX);
@@ -399,12 +403,14 @@ public final class FloatingMaterialOverlayState {
         if (snapshot == null) {
             if (!press) {
                 dragging = false;
+                resizing = false;
                 leftMouseDown = false;
             }
             return false;
         }
         if (!press) {
             dragging = false;
+            resizing = false;
             leftMouseDown = false;
             return false;
         }
@@ -420,13 +426,20 @@ public final class FloatingMaterialOverlayState {
         double localX = (mouseX - x) / scale;
         double localY = (mouseY - y) / scale;
 
-        if (button == 0 && localX >= BASE_WIDTH - 18 && localX <= BASE_WIDTH - 6 && localY >= 5 && localY <= 17) {
+        if (button == 0 && isOverResizeHandle(localX, localY)) {
+            resizing = true;
+            dragging = false;
+            cancel(event);
+            return true;
+        }
+
+        if (button == 0 && localX >= lastWidth - 18 && localX <= lastWidth - 6 && localY >= 5 && localY <= 17) {
             clear();
             cancel(event);
             return true;
         }
 
-        if (button == 0 && localX >= BASE_WIDTH - 44 && localX <= BASE_WIDTH - 32 && localY >= 5 && localY <= 17) {
+        if (button == 0 && localX >= lastWidth - 44 && localX <= lastWidth - 32 && localY >= 5 && localY <= 17) {
             showAll = !showAll;
             displayEntriesDirty = true;
             scrollOffset = 0;
@@ -435,7 +448,7 @@ public final class FloatingMaterialOverlayState {
         }
 
         if (button == 0 && snapshot.context() != null
-                && localX >= BASE_WIDTH - 31 && localX <= BASE_WIDTH - 19 && localY >= 5 && localY <= 17) {
+                && localX >= lastWidth - 31 && localX <= lastWidth - 19 && localY >= 5 && localY <= 17) {
             openRecipeTree();
             cancel(event);
             return true;
@@ -470,7 +483,11 @@ public final class FloatingMaterialOverlayState {
             long now = System.currentTimeMillis();
             if (now - lastTitleClickTime < 400) {
                 scale = 1.0F;
-                x = Math.max(6, Minecraft.getInstance().getWindow().getGuiScaledWidth() - Math.round(BASE_WIDTH * scale) - 8);
+                userWidth = 0;
+                userHeight = 0;
+                cachedLayoutColumns = -1;
+                x = Math.max(6, Minecraft.getInstance().getWindow().getGuiScaledWidth()
+                        - Math.round(widthForColumns(DEFAULT_COLUMNS) * scale) - 8);
                 y = 8;
                 clampToScreen();
                 lastTitleClickTime = 0;
@@ -501,15 +518,60 @@ public final class FloatingMaterialOverlayState {
 
     private static boolean isOverAutoCraftButton(double localX, double localY) {
         int craftY = autoCraftButtonTop(lastHeight);
-        return localX >= AUTO_CRAFT_LEFT && localX < AUTO_CRAFT_LEFT + AUTO_CRAFT_WIDTH
+        int left = actionCraftLeft();
+        return localX >= left && localX < left + CONTROL_SIZE
                 && localY >= craftY && localY < craftY + CONTROL_SIZE;
     }
 
     private static boolean isOverCreativeRefillButton(double localX, double localY) {
         int refillY = autoCraftButtonTop(lastHeight);
+        int left = actionRefillLeft();
         return canCreativeRefill()
-                && localX >= CREATIVE_REFILL_LEFT && localX < CREATIVE_REFILL_LEFT + CREATIVE_REFILL_WIDTH
+                && localX >= left && localX < left + CONTROL_SIZE
                 && localY >= refillY && localY < refillY + CONTROL_SIZE;
+    }
+
+    private static boolean isOverResizeHandle(double localX, double localY) {
+        return localX >= lastWidth - RESIZE_HANDLE && localX < lastWidth
+                && localY >= lastHeight - RESIZE_HANDLE && localY < lastHeight;
+    }
+
+    private static CursorHelper.Shape pointerCursor(double localX, double localY, double mouseX, double mouseY) {
+        if (resizing) {
+            return CursorHelper.Shape.NWSE;
+        }
+        if (dragging) {
+            return CursorHelper.Shape.HAND;
+        }
+        if (!contains(mouseX, mouseY)) {
+            return CursorHelper.Shape.ARROW;
+        }
+        if (isOverResizeHandle(localX, localY)) {
+            return CursorHelper.Shape.NWSE;
+        }
+        if (localY >= 0 && localY <= HEADER_HEIGHT && !isOverHeaderControl(localX, localY)) {
+            return CursorHelper.Shape.HAND;
+        }
+        return CursorHelper.Shape.ARROW;
+    }
+
+    private static boolean isOverHeaderControl(double localX, double localY) {
+        if (localY < 5 || localY > 17) {
+            return false;
+        }
+        return (localX >= 6 && localX <= 18)
+                || (localX >= lastWidth - 44 && localX <= lastWidth - 32)
+                || (snapshot != null && snapshot.context() != null
+                && localX >= lastWidth - 31 && localX <= lastWidth - 19)
+                || (localX >= lastWidth - 18 && localX <= lastWidth - 6);
+    }
+
+    private static int actionCraftLeft() {
+        return lastWidth - CONTENT_PADDING - RESIZE_HANDLE - CONTROL_SIZE;
+    }
+
+    private static int actionRefillLeft() {
+        return actionCraftLeft() - 4 - CONTROL_SIZE;
     }
 
     private static void runAutoCraft() {
@@ -550,6 +612,8 @@ public final class FloatingMaterialOverlayState {
                 : List.of(playerSlots, containerSlots);
 
         Map<Integer, ItemStack> planned = new LinkedHashMap<>();
+        Map<Integer, Integer> beforeCounts = new LinkedHashMap<>();
+        Map<Integer, MaterialKey> slotKeys = new LinkedHashMap<>();
         boolean shortOnSpace = false;
         Map<String, Long> byMaterial = missingByMaterial();
         Map<String, DisplayEntry> firstByMaterial = new LinkedHashMap<>();
@@ -559,22 +623,34 @@ public final class FloatingMaterialOverlayState {
             if (entry == null) continue;
             ItemStack template = itemStack(entry.source());
             if (template.isEmpty()) continue;
+            MaterialKey materialKey = materialKey(entry.source());
             long remaining = item.getValue();
             for (var tier : tiers) {
-                remaining = planRefill(tier, template, remaining, planned, true);
-                remaining = planRefill(tier, template, remaining, planned, false);
+                remaining = planRefill(tier, template, remaining, planned, beforeCounts, slotKeys, materialKey, true);
+                remaining = planRefill(tier, template, remaining, planned, beforeCounts, slotKeys, materialKey, false);
             }
             shortOnSpace |= remaining > 0L;
         }
 
         List<CreativeRefillRequestPayload.Fill> fills = new ArrayList<>();
-        planned.forEach((slot, stack) -> fills.add(new CreativeRefillRequestPayload.Fill(slot, stack)));
+        Map<MaterialKey, Long> expected = new LinkedHashMap<>();
+        planned.forEach((slot, stack) -> {
+            fills.add(new CreativeRefillRequestPayload.Fill(slot, stack));
+            int added = stack.getCount() - beforeCounts.getOrDefault(slot, 0);
+            MaterialKey key = slotKeys.get(slot);
+            if (key != null && added > 0) {
+                expected.merge(key, (long) added, FloatingMaterialOverlayState::saturatedAddLong);
+            }
+        });
         for (int from = 0; from < fills.size(); from += CreativeRefillRequestPayload.MAX_FILLS_PER_PACKET) {
             int to = Math.min(fills.size(), from + CreativeRefillRequestPayload.MAX_FILLS_PER_PACKET);
             PacketDistributor.sendToServer(new CreativeRefillRequestPayload(menu.containerId,
                     fills.subList(from, to)));
         }
-        if (!fills.isEmpty()) ClientInventorySnapshotCache.invalidate();
+        if (!expected.isEmpty()) {
+            ClientInventorySnapshotCache.applyExpectedChanges(expected);
+            displayEntriesDirty = true;
+        }
         player.displayClientMessage(Component.translatable(fills.isEmpty()
                 ? "message.jeict.creative_refill_no_space"
                 : shortOnSpace ? "message.jeict.creative_refill_partial" : "message.jeict.creative_refill_sent",
@@ -586,7 +662,8 @@ public final class FloatingMaterialOverlayState {
      * it or using empty slots, and returns what did not fit. Results accumulate in {@code planned} as final stacks.
      */
     private static long planRefill(List<net.minecraft.world.inventory.Slot> slots, ItemStack template,
-            long remaining, Map<Integer, ItemStack> planned, boolean topUpOnly) {
+            long remaining, Map<Integer, ItemStack> planned, Map<Integer, Integer> beforeCounts,
+            Map<Integer, MaterialKey> slotKeys, @Nullable MaterialKey materialKey, boolean topUpOnly) {
         for (var slot : slots) {
             if (remaining <= 0L) break;
             ItemStack current = planned.getOrDefault(slot.index, slot.getItem());
@@ -595,6 +672,8 @@ public final class FloatingMaterialOverlayState {
             int max = slot.getMaxStackSize(template);
             int space = max - current.getCount();
             if (space <= 0) continue;
+            beforeCounts.putIfAbsent(slot.index, current.getCount());
+            if (materialKey != null) slotKeys.putIfAbsent(slot.index, materialKey);
             int added = (int) Math.min(remaining, space);
             planned.put(slot.index, template.copyWithCount(current.getCount() + added));
             remaining -= added;
@@ -621,62 +700,38 @@ public final class FloatingMaterialOverlayState {
     }
 
     private static boolean handleContentClick(double localX, double localY, int button) {
-        List<DisplayGroup> displayGroups = displayGroups();
-        if (displayGroups.isEmpty()) {
+        displayGroups();
+        if (cachedSlots.isEmpty()) {
             return false;
         }
-
         int contentTop = HEADER_HEIGHT + 4;
-        int adjustedY = (int) localY + scrollOffset - contentTop;
-        int adjustedX = (int) localX - CONTENT_PADDING;
-        if (adjustedX < 0 || adjustedX >= GROUP_WIDTH || adjustedY < 0) {
+        int chainX = CONTENT_PADDING + CHAIN_INSET;
+        int chainY = contentTop - scrollOffset + CHAIN_INSET;
+        PlacedSlot hit = slotAt(localX, localY, chainX, chainY);
+        if (hit == null) {
             return false;
         }
-        int groupTop = 0;
-        for (DisplayGroup group : displayGroups) {
-            if (adjustedY >= groupTop && adjustedY < groupTop + group.height()) {
-                int gy = adjustedY - groupTop;
-                if (!isOverBadge(group, adjustedX, gy)) {
-                    DisplayEntry hit = entryAt(group, adjustedX, gy);
-                    if (hit != null) openJeiForEntry(hit.source(), button);
-                }
-                return true;
+        if (hit.kind() != SlotKind.MACHINE && hit.entry() != null) {
+            openJeiForEntry(hit.entry().source(), button);
+        }
+        return true;
+    }
+
+    private static @Nullable PlacedSlot slotAt(double localX, double localY, int chainX, int chainY) {
+        int gx = (int) Math.floor(localX - chainX);
+        int gy = (int) Math.floor(localY - chainY);
+        if (gx < 0 || gy < 0) {
+            return null;
+        }
+        int col = gx / SLOT_SIZE;
+        int row = gy / SLOT_SIZE;
+        if (col >= currentColumns()) {
+            return null;
+        }
+        for (PlacedSlot slot : cachedSlots) {
+            if (slot.col() == col && slot.row() == row) {
+                return slot;
             }
-            groupTop += group.height() + GROUP_GAP;
-        }
-        return false;
-    }
-
-    private static int inputX(DisplayGroup group, int index) {
-        int perRow = group.entries().size() <= MAX_INPUTS_SINGLE_ROW ? group.entries().size() : INPUTS_PER_ROW_WRAPPED;
-        return GROUP_PADDING + index % perRow * MATERIAL_CELL_SIZE;
-    }
-
-    private static int inputY(DisplayGroup group, int index) {
-        int perRow = group.entries().size() <= MAX_INPUTS_SINGLE_ROW ? group.entries().size() : INPUTS_PER_ROW_WRAPPED;
-        return GROUP_PADDING + index / perRow * MATERIAL_CELL_SIZE;
-    }
-
-    private static int outputY(DisplayGroup group) {
-        return (group.height() - ICON_SIZE) / 2;
-    }
-
-    private static boolean isOverBadge(DisplayGroup group, int gx, int gy) {
-        if (group.output() == null || group.machineIcon() == null) return false;
-        int badgeX = OUTPUT_X + ICON_SIZE - BADGE_SIZE + 2;
-        int badgeY = outputY(group) - 3;
-        return gx >= badgeX && gx < badgeX + BADGE_SIZE && gy >= badgeY && gy < badgeY + BADGE_SIZE;
-    }
-
-    private static @Nullable DisplayEntry entryAt(DisplayGroup group, int gx, int gy) {
-        for (int i = 0; i < group.entries().size(); i++) {
-            int ix = inputX(group, i);
-            int iy = inputY(group, i);
-            if (gx >= ix && gx < ix + ICON_SIZE && gy >= iy && gy < iy + ICON_SIZE) return group.entries().get(i);
-        }
-        if (group.output() != null) {
-            int oy = outputY(group);
-            if (gx >= OUTPUT_X && gx < OUTPUT_X + ICON_SIZE && gy >= oy && gy < oy + ICON_SIZE) return group.output();
         }
         return null;
     }
@@ -719,7 +774,19 @@ public final class FloatingMaterialOverlayState {
     }
 
     private static boolean handleDrag(double mouseX, double mouseY, int button) {
-        if (button != 0 || !dragging || snapshot == null) {
+        if (button != 0 || snapshot == null) {
+            return false;
+        }
+        if (resizing) {
+            userWidth = clamp((int) Math.round((mouseX - x) / scale), minPanelWidth(), maxPanelWidth());
+            userHeight = clamp((int) Math.round((mouseY - y) / scale), minPanelHeight(), maxPanelHeight());
+            lastWidth = userWidth;
+            lastHeight = userHeight;
+            cachedLayoutColumns = -1;
+            clampToScreen();
+            return true;
+        }
+        if (!dragging) {
             return false;
         }
         x = (int) Math.round(mouseX - dragOffsetX);
@@ -791,15 +858,72 @@ public final class FloatingMaterialOverlayState {
         return minecraft.mouseHandler.ypos() * minecraft.getWindow().getGuiScaledHeight() / minecraft.getWindow().getScreenHeight();
     }
 
-    private static int computeTotalContentHeight(List<DisplayGroup> groups) {
-        if (groups.isEmpty()) {
-            return 0;
+    private static int chainContentHeight() {
+        return cachedRows <= 0 ? 0 : cachedRows * SLOT_SIZE + CHAIN_INSET * 2;
+    }
+
+    private static void refreshPanelSize() {
+        lastWidth = clamp(userWidth > 0 ? userWidth : widthForColumns(DEFAULT_COLUMNS),
+                minPanelWidth(), maxPanelWidth());
+        displayGroups();
+        layoutCurrentColumns();
+        int autoHeight = HEADER_HEIGHT + 4
+                + Math.min(chainContentHeight(), DEFAULT_MAX_CONTENT_HEIGHT)
+                + 4 + FOOTER_HEIGHT;
+        lastHeight = clamp(userHeight > 0 ? userHeight : autoHeight, minPanelHeight(), maxPanelHeight());
+    }
+
+    private static int currentColumns() {
+        int width = lastWidth > 0 ? lastWidth : widthForColumns(DEFAULT_COLUMNS);
+        int inner = width - CONTENT_PADDING * 2 - CHAIN_INSET * 2 - SCROLLBAR_WIDTH - 2;
+        return clamp(inner / SLOT_SIZE, MIN_COLUMNS, MAX_COLUMNS);
+    }
+
+    private static int widthForColumns(int columns) {
+        return CONTENT_PADDING * 2 + CHAIN_INSET * 2 + columns * SLOT_SIZE + SCROLLBAR_WIDTH + 2;
+    }
+
+    private static int minPanelWidth() {
+        return Math.max(widthForColumns(MIN_COLUMNS), 6 + CONTROL_SIZE + 4 + 48 + 44);
+    }
+
+    private static int minPanelHeight() {
+        return HEADER_HEIGHT + 4 + SLOT_SIZE * 2 + CHAIN_INSET * 2 + 4 + FOOTER_HEIGHT;
+    }
+
+    private static int maxPanelWidth() {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.getWindow() == null) {
+            return widthForColumns(MAX_COLUMNS);
         }
-        int height = -GROUP_GAP;
-        for (DisplayGroup group : groups) {
-            height += group.height() + GROUP_GAP;
+        return Math.max(minPanelWidth(), (int) (minecraft.getWindow().getGuiScaledWidth() / scale));
+    }
+
+    private static int maxPanelHeight() {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.getWindow() == null) {
+            return minPanelHeight() + DEFAULT_MAX_CONTENT_HEIGHT;
         }
-        return height;
+        return Math.max(minPanelHeight(), (int) (minecraft.getWindow().getGuiScaledHeight() / scale));
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    /** Window-pixel scissor so JEI's leftover GuiGraphics scissor cannot hide the chain. */
+    private static void applyContentScissor(int contentTop, int contentBottom) {
+        Minecraft minecraft = Minecraft.getInstance();
+        var window = minecraft.getWindow();
+        double scaleX = (double) window.getWidth() / window.getGuiScaledWidth();
+        double scaleY = (double) window.getHeight() / window.getGuiScaledHeight();
+        int x1 = (int) Math.floor((x + CONTENT_PADDING * scale) * scaleX);
+        int y1 = (int) Math.floor((y + contentTop * scale) * scaleY);
+        int x2 = (int) Math.ceil((x + (lastWidth - SCROLLBAR_WIDTH - 2) * scale) * scaleX);
+        int y2 = (int) Math.ceil((y + contentBottom * scale) * scaleY);
+        int width = Math.max(0, x2 - x1);
+        int height = Math.max(0, y2 - y1);
+        RenderSystem.enableScissor(x1, window.getHeight() - y2, width, height);
     }
 
     private static List<DisplayGroup> displayGroups() {
@@ -816,6 +940,8 @@ public final class FloatingMaterialOverlayState {
             }
         }
         cachedDisplayGroups = List.copyOf(groups);
+        cachedLayoutColumns = -1;
+        layoutCurrentColumns();
         cachedMissingRaw = List.copyOf(missing);
         cachedInventoryVersion = inventoryVersion;
         cachedShowAll = showAll;
@@ -849,7 +975,7 @@ public final class FloatingMaterialOverlayState {
             for (DisplayEntry entry : entries) state = worse(state, entry.state());
             Entry source = first.get(key);
             groups.add(new DisplayGroup(source.machineIcon(), source.machineName(), null, List.copyOf(entries),
-                    groupHeight(entries.size()), state));
+                    0L, state));
         });
         return groups;
     }
@@ -904,6 +1030,10 @@ public final class FloatingMaterialOverlayState {
             inputResults.add(new InputResult(input, need, result));
         }
         path.remove(task);
+        long produced = saturatedMultiply(crafts, task.outputPerCraft());
+        if (produced > missing) {
+            available.merge(task.outputKey(), produced - missing, FloatingMaterialOverlayState::saturatedAddLong);
+        }
         State state = ready ? State.CRAFTABLE : own;
         StepBuilder step = new StepBuilder(task, required, used, state);
         for (InputResult item : inputResults) {
@@ -983,16 +1113,25 @@ public final class FloatingMaterialOverlayState {
         }
 
         private DisplayGroup freeze() {
+            long missing = Math.max(0L, required - used);
+            long crafts = state == State.ENOUGH
+                    ? ceilDiv(required, task.outputPerCraft())
+                    : ceilDiv(missing, task.outputPerCraft());
             List<DisplayEntry> entries = new ArrayList<>(inputs.size());
             for (Map.Entry<String, InputBuilder> entry : inputs.entrySet()) {
                 InputBuilder builder = entry.getValue();
-                entries.add(displayEntry(builder.task.output(), entry.getKey(), builder.need, builder.have,
+                long need = builder.task.consumed()
+                        ? saturatedMultiply(builder.task.requiredAmount(), Math.max(1L, crafts))
+                        : builder.task.requiredAmount();
+                if (need <= 0L) need = builder.need;
+                long have = Math.min(builder.have, need);
+                entries.add(displayEntry(builder.task.output(), entry.getKey(), need, have,
                         builder.state, builder.raw));
             }
             Entry output = task.output();
             return new DisplayGroup(output.machineIcon(), output.machineName(),
                     displayEntry(output, task.identity() + "#out", required, used, state, false),
-                    List.copyOf(entries), groupHeight(entries.size()), state);
+                    List.copyOf(entries), crafts, state);
         }
     }
 
@@ -1031,24 +1170,158 @@ public final class FloatingMaterialOverlayState {
     }
 
     private static long availableAmount(com.lhy.jeict.planning.InventorySnapshot inventory, Entry entry) {
+        MaterialKey key = materialKey(entry);
+        return key == null ? 0L : inventory.amount(key);
+    }
+
+    private static @Nullable MaterialKey materialKey(Entry entry) {
         IJeiRuntime runtime = JeiCraftingTreePlugin.getJeiRuntime();
-        if (runtime == null) return 0L;
+        if (runtime == null) return null;
         ITypedIngredient<?> ingredient = entry.ingredient();
         if (ingredient == null && !entry.stack().isEmpty()) {
             ingredient = runtime.getIngredientManager().createTypedIngredient(entry.stack().copyWithCount(1), true)
                     .orElse(null);
         }
-        if (ingredient == null) return 0L;
-        MaterialKey key = IngredientIdentityUtil.keyOf(runtime.getIngredientManager(), ingredient);
-        return inventory.amount(key);
+        if (ingredient == null) return null;
+        return IngredientIdentityUtil.keyOf(runtime.getIngredientManager(), ingredient);
     }
 
-    private static int groupHeight(int inputCount) {
-        if (inputCount <= MAX_INPUTS_SINGLE_ROW) {
-            return GROUP_PADDING * 2 + ICON_SIZE;
+    private static void layoutCurrentColumns() {
+        int columns = currentColumns();
+        if (columns == cachedLayoutColumns) {
+            return;
         }
-        int rows = (inputCount + INPUTS_PER_ROW_WRAPPED - 1) / INPUTS_PER_ROW_WRAPPED;
-        return GROUP_PADDING * 2 + rows * MATERIAL_CELL_SIZE - ICON_GAP;
+        cachedSlots = layoutSlots(cachedDisplayGroups, columns);
+        cachedRows = countRows(cachedSlots);
+        cachedLayoutColumns = columns;
+    }
+
+    private static List<PlacedSlot> layoutSlots(List<DisplayGroup> groups, int columns) {
+        List<PlacedSlot> slots = new ArrayList<>();
+        int col = 0;
+        int row = 0;
+        boolean rowOccupied = false;
+        for (DisplayGroup group : groups) {
+            if (rowOccupied) {
+                row++;
+                col = 0;
+                rowOccupied = false;
+            }
+            boolean firstInStep = true;
+            for (DisplayEntry entry : group.entries()) {
+                int[] pos = nextCell(col, row, firstInStep, columns);
+                col = pos[0];
+                row = pos[1];
+                firstInStep = false;
+                slots.add(new PlacedSlot(SlotKind.INPUT, entry, col, row, group.crafts(), null, null));
+                col++;
+                rowOccupied = true;
+            }
+            if (group.output() != null) {
+                int[] pos = nextCell(col, row, firstInStep, columns);
+                col = pos[0];
+                row = pos[1];
+                firstInStep = false;
+                slots.add(new PlacedSlot(SlotKind.OUTPUT, group.output(), col, row, group.crafts(), null, null));
+                col++;
+                rowOccupied = true;
+            }
+            if (group.machineIcon() != null) {
+                int[] pos = nextCell(col, row, firstInStep, columns);
+                col = pos[0];
+                row = pos[1];
+                slots.add(new PlacedSlot(SlotKind.MACHINE, null, col, row, group.crafts(),
+                        group.machineIcon(), group.machineName()));
+                col++;
+                rowOccupied = true;
+            }
+        }
+        return List.copyOf(slots);
+    }
+
+    /** Continues a step in the current cell, wrapping with a one-column indent. */
+    private static int[] nextCell(int col, int row, boolean firstInStep, int columns) {
+        if (!firstInStep && col >= columns) {
+            return new int[] { columns > 1 ? 1 : 0, row + 1 };
+        }
+        return new int[] { col, row };
+    }
+
+    private static int countRows(List<PlacedSlot> slots) {
+        int rows = 0;
+        for (PlacedSlot slot : slots) {
+            rows = Math.max(rows, slot.row() + 1);
+        }
+        return rows;
+    }
+
+    private static void drawChainBorder(GuiGraphics graphics, int chainX, int chainY) {
+        if (cachedSlots.isEmpty()) {
+            return;
+        }
+        Set<Long> occupied = new HashSet<>();
+        for (PlacedSlot slot : cachedSlots) {
+            occupied.add(cellKey(slot.col(), slot.row()));
+        }
+        for (PlacedSlot slot : cachedSlots) {
+            int sx = chainX + slot.col() * SLOT_SIZE;
+            int sy = chainY + slot.row() * SLOT_SIZE;
+            if (!occupied.contains(cellKey(slot.col() - 1, slot.row()))) {
+                graphics.fill(sx, sy, sx + 1, sy + SLOT_SIZE, CHAIN_COLOR);
+            }
+            if (!occupied.contains(cellKey(slot.col() + 1, slot.row()))) {
+                graphics.fill(sx + SLOT_SIZE - 1, sy, sx + SLOT_SIZE, sy + SLOT_SIZE, CHAIN_COLOR);
+            }
+            if (!occupied.contains(cellKey(slot.col(), slot.row() - 1))) {
+                graphics.fill(sx, sy, sx + SLOT_SIZE, sy + 1, CHAIN_COLOR);
+            }
+            if (!occupied.contains(cellKey(slot.col(), slot.row() + 1))) {
+                graphics.fill(sx, sy + SLOT_SIZE - 1, sx + SLOT_SIZE, sy + SLOT_SIZE, CHAIN_COLOR);
+            }
+        }
+    }
+
+    private static long cellKey(int col, int row) {
+        return ((long) row << 32) ^ (col & 0xFFFFFFFFL);
+    }
+
+    private static void drawPlacedSlot(GuiGraphics graphics, Font font, PlacedSlot slot, int sx, int sy) {
+        int iconX = sx + SLOT_ICON_PAD;
+        int iconY = sy + SLOT_ICON_PAD;
+        if (slot.kind() == SlotKind.MACHINE) {
+            renderMachineSlot(graphics, font, slot.machineIcon(), iconX, iconY);
+            return;
+        }
+        if (slot.entry() == null) {
+            return;
+        }
+        drawEntry(graphics, font, slot.entry(), iconX, iconY);
+        if (slot.kind() == SlotKind.OUTPUT && slot.crafts() > 0L) {
+            renderCornerLabel(graphics, font, "x" + formatCompactCount(slot.crafts()),
+                    sx + 1, sy + 1, MULTIPLIER_COLOR);
+        }
+    }
+
+    private static void renderMachineSlot(GuiGraphics graphics, Font font, @Nullable IDrawable icon, int x, int y) {
+        if (icon != null) {
+            graphics.pose().pushPose();
+            float iconScale = ICON_SIZE / (float) Math.max(1, Math.max(icon.getWidth(), icon.getHeight()));
+            graphics.pose().translate(x, y, 0.0F);
+            graphics.pose().scale(iconScale, iconScale, 1.0F);
+            icon.draw(graphics, 0, 0);
+            graphics.pose().popPose();
+        }
+        renderCornerLabel(graphics, font, "C", x, y, CATALYST_MARKER_COLOR);
+    }
+
+    private static void renderCornerLabel(GuiGraphics graphics, Font font, String text, int x, int y, int color) {
+        float textScale = 0.75F;
+        graphics.pose().pushPose();
+        graphics.pose().translate(x, y, 300.0F);
+        graphics.pose().scale(textScale, textScale, 1.0F);
+        graphics.drawString(font, text, 1, 1, 0xFF000000, false);
+        graphics.drawString(font, text, 0, 0, color, false);
+        graphics.pose().popPose();
     }
 
     private static void drawControl(GuiGraphics graphics, int x, int y, String text, int color) {
@@ -1058,38 +1331,80 @@ public final class FloatingMaterialOverlayState {
         graphics.drawCenteredString(font, text, x + CONTROL_SIZE / 2, textY, color);
     }
 
-    private static @Nullable Component controlTooltipAt(double localMouseX, double localMouseY) {
+    private static @Nullable List<Component> controlTooltipAt(double localMouseX, double localMouseY) {
+        if (isOverResizeHandle(localMouseX, localMouseY)) {
+            return List.of(Component.translatable("gui.jeict.recipe_tree.floating_resize_tooltip"));
+        }
         if (isOverAutoCraftButton(localMouseX, localMouseY)) {
-            return Component.translatable("gui.jeict.recipe_tree.floating_auto_craft_tooltip");
+            if (RecipeTreeAutoCraftSession.status().running()) {
+                return List.of(Component.translatable("gui.jeict.recipe_tree.floating_auto_craft_stop_tooltip"));
+            }
+            return List.of(
+                    Component.translatable("gui.jeict.recipe_tree.floating_auto_craft_tooltip"),
+                    Component.translatable("gui.jeict.recipe_tree.floating_auto_craft_tooltip_shift")
+                            .withStyle(s -> s.withColor(0xFFAAAAAA)));
         }
         if (isOverCreativeRefillButton(localMouseX, localMouseY)) {
-            return Component.translatable("gui.jeict.recipe_tree.floating_creative_refill_tooltip");
+            return List.of(
+                    Component.translatable("gui.jeict.recipe_tree.floating_creative_refill_tooltip"),
+                    Component.translatable("gui.jeict.recipe_tree.floating_creative_refill_tooltip_shift")
+                            .withStyle(s -> s.withColor(0xFFAAAAAA)));
         }
         if (localMouseY < 5 || localMouseY > 17) {
             return null;
         }
         if (localMouseX >= 6 && localMouseX <= 18) {
-            return Component.translatable(pinned
+            return List.of(Component.translatable(pinned
                     ? "gui.jeict.recipe_tree.floating_unpin_tooltip"
-                    : "gui.jeict.recipe_tree.floating_pin_tooltip");
+                    : "gui.jeict.recipe_tree.floating_pin_tooltip"));
         }
-        if (localMouseX >= 22 && localMouseX < BASE_WIDTH - 44) {
-            return Component.translatable("gui.jeict.recipe_tree.floating_scale_tooltip",
-                    Math.round(scale * 100.0F));
+        if (localMouseX >= 22 && localMouseX < lastWidth - 44) {
+            return List.of(Component.translatable("gui.jeict.recipe_tree.floating_scale_tooltip",
+                    Math.round(scale * 100.0F)));
         }
-        if (localMouseX >= BASE_WIDTH - 44 && localMouseX <= BASE_WIDTH - 32) {
-            return Component.translatable(showAll
+        if (localMouseX >= lastWidth - 44 && localMouseX <= lastWidth - 32) {
+            return List.of(Component.translatable(showAll
                     ? "gui.jeict.recipe_tree.floating_missing_only_tooltip"
-                    : "gui.jeict.recipe_tree.floating_show_all_tooltip");
+                    : "gui.jeict.recipe_tree.floating_show_all_tooltip"));
         }
         if (snapshot.context() != null
-                && localMouseX >= BASE_WIDTH - 31 && localMouseX <= BASE_WIDTH - 19) {
-            return Component.translatable("gui.jeict.recipe_tree.floating_back_tooltip");
+                && localMouseX >= lastWidth - 31 && localMouseX <= lastWidth - 19) {
+            return List.of(Component.translatable("gui.jeict.recipe_tree.floating_back_tooltip"));
         }
-        if (localMouseX >= BASE_WIDTH - 18 && localMouseX <= BASE_WIDTH - 6) {
-            return Component.translatable("gui.jeict.recipe_tree.floating_close_tooltip");
+        if (localMouseX >= lastWidth - 18 && localMouseX <= lastWidth - 6) {
+            return List.of(Component.translatable("gui.jeict.recipe_tree.floating_close_tooltip"));
         }
         return null;
+    }
+
+    private static void drawCraftIcon(GuiGraphics graphics, int x, int y, boolean stop, int color) {
+        if (stop) {
+            graphics.fill(x + 3, y + 3, x + 9, y + 9, color);
+            return;
+        }
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 3; col++) {
+                int px = x + 2 + col * 3;
+                int py = y + 2 + row * 3;
+                graphics.fill(px, py, px + 2, py + 2, color);
+            }
+        }
+    }
+
+    private static void drawRefillIcon(GuiGraphics graphics, int x, int y, int color) {
+        graphics.fill(x + 5, y + 2, x + 7, y + 10, color);
+        graphics.fill(x + 2, y + 5, x + 10, y + 7, color);
+    }
+
+    private static void drawResizeGrip(GuiGraphics graphics, int width, int height, int color) {
+        for (int row = 0; row < 3; row++) {
+            int dots = 3 - row;
+            for (int col = 0; col < dots; col++) {
+                int gx = width - 3 - col * 3;
+                int gy = height - 3 - row * 3;
+                graphics.fill(gx, gy, gx + 2, gy + 2, color);
+            }
+        }
     }
 
     private static void renderEntryIngredient(GuiGraphics graphics, Entry entry, int x, int y) {
@@ -1132,21 +1447,7 @@ public final class FloatingMaterialOverlayState {
         graphics.pose().popPose();
     }
 
-    /** Draws the machine as a small corner badge at the top-right of the product icon. */
-    private static void renderMachineBadge(GuiGraphics graphics, IDrawable icon, int outX, int outY,
-            RecipeTreeTheme.Palette theme) {
-        int badgeX = outX + ICON_SIZE - BADGE_SIZE + 2;
-        int badgeY = outY - 3;
-        graphics.pose().pushPose();
-        graphics.pose().translate(0.0F, 0.0F, BADGE_Z);
-        graphics.fill(badgeX - 1, badgeY - 1, badgeX + BADGE_SIZE + 1, badgeY + BADGE_SIZE + 1, theme.slotBorder());
-        graphics.fill(badgeX, badgeY, badgeX + BADGE_SIZE, badgeY + BADGE_SIZE, theme.slotInner());
-        float scale = BADGE_SIZE / (float) Math.max(1, Math.max(icon.getWidth(), icon.getHeight()));
-        graphics.pose().translate(badgeX, badgeY, 0.0F);
-        graphics.pose().scale(scale, scale, 1.0F);
-        icon.draw(graphics, 0, 0);
-        graphics.pose().popPose();
-    }
+
 
     private static StatusLine statusLine(RecipeTreeTheme.Palette theme) {
         RecipeTreeAutoCraftSession.Status status = RecipeTreeAutoCraftSession.status();
@@ -1350,8 +1651,18 @@ public final class FloatingMaterialOverlayState {
             boolean raw, Component badgeText) {
     }
 
+    private enum SlotKind {
+        INPUT,
+        OUTPUT,
+        MACHINE
+    }
+
+    private record PlacedSlot(SlotKind kind, @Nullable DisplayEntry entry, int col, int row, long crafts,
+            @Nullable IDrawable machineIcon, @Nullable Component machineName) {
+    }
+
     private record DisplayGroup(@Nullable IDrawable machineIcon, @Nullable Component machineName,
-            @Nullable DisplayEntry output, List<DisplayEntry> entries, int height, State state) {
+            @Nullable DisplayEntry output, List<DisplayEntry> entries, long crafts, State state) {
     }
 
     public record Entry(ItemStack stack, @Nullable ITypedIngredient<?> ingredient, int count, String amountLabel,

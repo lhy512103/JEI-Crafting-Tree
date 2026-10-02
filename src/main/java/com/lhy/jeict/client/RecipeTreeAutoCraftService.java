@@ -267,6 +267,12 @@ public final class RecipeTreeAutoCraftService {
             inputsReady &= rawUsed >= required;
         }
         path.remove(node);
+        if (inputsReady) {
+            long produced = saturatedMultiply(crafts, recipe.primaryOutputAmount());
+            if (produced > missing) {
+                available.merge(outputKey, produced - missing, RecipePlanSolver::saturatedAdd);
+            }
+        }
         return inputsReady ? new Selection(recipe, false) : new Selection(null, false);
     }
 

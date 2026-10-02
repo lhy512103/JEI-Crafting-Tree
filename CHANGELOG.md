@@ -1,8 +1,8 @@
 # Changelog
 
-[v0.0.4](#v004) | [v0.0.3](#v003) | [v0.0.2](#v002) | [v0.0.1](#v001--2026-07-23)
+[v1.0.0](#v100) | [v0.0.4](#v004) | [v0.0.3](#v003) | [v0.0.2](#v002) | [v0.0.1](#v001--2026-07-23)
 
-## Unreleased
+## v1.0.0
 
 ### English
 
@@ -13,8 +13,10 @@
 5. Fixed: creative Refill ignoring stack upgrades of Sophisticated containers.
 6. Fixed: missing materials reported as "unsupported screen".
 7. Added: API `StopReason` values `MISSING_ITEMS`, `NO_HANDLER`, `NO_CONTAINER`, `REJECTED`.
-8. Optimized: floating material panel now shows the whole crafting chain step by step (inputs → product) with per-step progress colors.
-9. Optimized: machine shown as a corner badge on the product icon instead of its own slot.
+8. Optimized: the material requirements panel uses a bookmark-style slot flow in a floating overlay.
+9. Fixed: creative refill over-supplying materials; demand is now merged by material type.
+10. Optimized: multi-candidate inputs default to AE2 encoding order: already-craftable/pattern first, then undamaged, then highest stock.
+11. Optimized: alternative-material picker is a draggable/resizable floating panel with a search box.
 
 ### 中文
 
@@ -25,10 +27,10 @@
 5. 修复：创造补料不识别精妙存储/背包的堆叠升级。
 6. 修复：材料不足被误报为”界面不支持”。
 7. 新增：API `StopReason` 增加 `MISSING_ITEMS`、`NO_HANDLER`、`NO_CONTAINER`、`REJECTED`。
-8. 优化：材料需求面板改为合成链形式，按步骤完整显示”材料 → 产物”，并用颜色标出每一步的进度。
-9. 优化：机器图标改为产物图标右上角的角标，不再单独占用一个槽位。
-10. 修复：创造补充材料过多的bug，现在按材料种类合并需求量。
-11. 优化：≤6个输入材料时横向单行显示，>6个时自动换行，布局更清晰。
+8. 优化：材料需求面板改为书签式槽位流并采用悬浮面板。
+9. 修复：创造补充材料过多的bug，现在按材料种类合并需求量。
+10. 优化：多候选输入默认按 AE 编码规则选择：已有样板优先，其次完好，再按存量。
+11. 优化：候选材料选择改为可拖拽缩放的悬浮面板，并带搜索框。
 
 ## v0.0.4
 

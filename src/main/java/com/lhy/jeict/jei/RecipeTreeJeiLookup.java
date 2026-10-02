@@ -10,6 +10,7 @@ import java.util.Optional;
 
 import org.jetbrains.annotations.Nullable;
 
+import com.lhy.jeict.client.IngredientCandidateRanker;
 import com.lhy.jeict.config.RecipeTreeConfig;
 import com.lhy.jeict.recipe_tree.RecipeTreeInputViewModel;
 import com.lhy.jeict.recipe_tree.RecipeTreeInputViewModel.DisplayOption;
@@ -351,9 +352,13 @@ public final class RecipeTreeJeiLookup {
                 ITypedIngredient<?> displayed = getDisplayedIngredient(slotView);
                 if (displayed != null) amount = resolveDisplayedIngredientAmountLong(ingredientManager, displayed, amount);
             }
-            inputs.add(new RecipeTreeInputViewModel(ingredient, displayOptions, amount,
+            RecipeTreeInputViewModel input = new RecipeTreeInputViewModel(ingredient, displayOptions, amount,
                     formatAmountText(slotView, (int) Math.min(Integer.MAX_VALUE, amount)), consumed,
-                    preserveSlotIndex ? slotIndex : -1));
+                    preserveSlotIndex ? slotIndex : -1);
+            if (input.hasAlternativeChoices()) {
+                input.selectAlternative(IngredientCandidateRanker.bestIndex(input.displayOptions()));
+            }
+            inputs.add(input);
         }
     }
 
